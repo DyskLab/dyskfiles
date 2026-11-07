@@ -1,124 +1,127 @@
-# DyskFiles
+<p align="center">
+  <img src="build/icon.png" width="88" alt="DyskFiles">
+</p>
 
-<p><img src="build/icon.png" width="96" alt="DyskFiles"></p>
+<h1 align="center">DyskFiles</h1>
 
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/fannydevz)
+<p align="center">A desktop asset manager that keeps your library in tidy, readable folders: thumbnails and JSON, no database.</p>
 
-An **Eagle-style desktop asset manager**. Create a *library*, drag in your images, videos,
-audio, and text files, and DyskFiles indexes them into a **tidy, human-readable folder** on disk —
-thumbnails + JSON, no database.
+<p align="center">
+  <a href="https://github.com/DyskLab/dyskfiles/releases/latest"><img src="https://img.shields.io/github/v/release/DyskLab/dyskfiles" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/DyskLab/dyskfiles" alt="MIT License"></a>
+  <a href="https://www.fanny.dev/dysklab"><img src="https://img.shields.io/badge/part%20of-DyskLab-3B82F6" alt="Part of DyskLab"></a>
+  <a href="https://buymeacoffee.com/fannydevz"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=000" alt="Buy Me a Coffee"></a>
+</p>
 
-![DyskFiles — grid view](docs/screenshots/01-grid.png)
+![DyskFiles grid view](docs/screenshots/01-grid.png)
 
-> Unlike Eagle (which stores items in randomly-named `xxxx.info/` folders), DyskFiles keeps
-> everything in flat, readable folders you can browse in Finder — grouped by the file name's
-> first three letters.
+Create a library, drag in your images, videos, audio, and text files, then browse and organize them. Unlike Eagle,
+which stores items in randomly named `xxxx.info/` folders, DyskFiles keeps everything in flat folders you can read in
+Finder, grouped by the first three letters of each file name.
+
+## Download
+
+Get the DMG for Apple Silicon from the [latest release](https://github.com/DyskLab/dyskfiles/releases/latest), open it,
+and drag **DyskFiles** into Applications.
+
+The app isn't notarized, so macOS blocks the first launch. Open **System Settings > Privacy & Security** and choose
+**Open Anyway**, or run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/DyskFiles.app
+```
+
+On Intel Macs, [run it from source](#run-from-source).
 
 ## Features
 
 **Libraries**
-- Create / open a `<name>.dyskfiles` library that holds your whole collection. Libraries made before the rename (`<name>.pitek`) still open as they are.
-- Keep **multiple libraries** and switch between them from the sidebar; the last one reopens
-  automatically on launch.
-- Per-library actions: change icon, reveal in Finder, merge into another library, remove, delete.
+- Keep several `<name>.dyskfiles` libraries and switch between them from the sidebar. The last one reopens on launch.
+- Change a library's icon, reveal it in Finder, merge it into another library, remove it, or delete it.
+- Libraries made before the rename (`<name>.pitek`) open as they are.
 
 **Importing**
-- Drag-and-drop, a file picker, a whole **folder** (walked recursively), or **from a URL**.
-- **Link / Reference import** — reference files *in place* without copying them into the
-  library (saves disk space; the library keeps only the metadata + thumbnail).
+- Drag and drop, a file picker, a whole folder, or a URL.
+- **Linked imports** reference files where they are, so the library holds only metadata and a thumbnail.
 
 **Media**
-- **Images** — thumbnails via [sharp](https://sharp.pixelplumbing.com/) (WebP, ≤400px).
-- **Video** — a poster frame is captured automatically for the thumbnail; plays in a built-in player.
-- **Audio** — built-in player with a generated waveform-less poster.
-- **Text / code** — opens in a VS Code-style editor (CodeMirror) with syntax highlighting.
+- **Images:** WebP thumbnails up to 400px, made with [sharp](https://sharp.pixelplumbing.com/).
+- **Video and audio:** built-in players, with a poster frame captured automatically for video.
+- **Text and code:** a CodeMirror editor with syntax highlighting.
 
 **Organizing**
-- **Multiple folders per item**, **tags** (with an *All Tags* page), and **smart folders**
-  (saved filters).
-- Views: **All**, **Uncategorized**, **Untagged**, **Recently Used**, **Random**, and a real **Trash**.
-- A rich **filter bar** (type, color, shape, rating, dimensions, duration, size, dates, comment,
-  note, URL…) and **search** with a configurable scope.
-- **Find duplicates** by content hash.
+- Multiple folders per item, tags with an All Tags page, and smart folders that save a filter.
+- Views for All, Uncategorized, Untagged, Recently Used, Random, and Trash.
+- Filters for type, color, shape, rating, dimensions, duration, size, dates, comment, note, and URL.
+- Search with a configurable scope, and duplicate detection by content hash.
 
-**Viewing & editing**
-- Grid layouts: **waterfall**, **justified**, **grid**, **list**, with a zoom slider and sort options.
-- **Inspector** with rating, tags, folders, notes/URL, a color palette (hover a swatch for its
-  coverage %), and full metadata.
-- **Preview** (lightbox) with **rotate**, **flip**, **fit / actual size**, **crop**, and **next / previous**.
+**Viewing and editing**
+- Waterfall, justified, grid, and list layouts, with zoom and sorting.
+- An inspector with rating, tags, folders, notes, URL, color palette, and metadata.
+- A preview with rotate, flip, fit or actual size, crop, and next and previous.
 
-![Inspector & color palette](docs/screenshots/02-inspector.png)
-
-![Preview with crop / rotate / flip toolbar](docs/screenshots/03-lightbox.png)
-
-![Add menu — import & link options](docs/screenshots/04-add-menu.png)
+| Inspector | Preview | Add menu |
+| --- | --- | --- |
+| ![Inspector and color palette](docs/screenshots/02-inspector.png) | ![Preview with its toolbar](docs/screenshots/03-lightbox.png) | ![Add menu with import options](docs/screenshots/04-add-menu.png) |
 
 ## Library layout on disk
 
-Everything for one item — its metadata JSON, the original, and the thumbnail — lives together
-in a folder named after the file's **first three initials**. Files sharing initials share a folder:
+Each item's metadata, original, and thumbnail sit together in a folder named after the first three letters of the file
+name:
 
 ```
 MyLibrary.dyskfiles/
-├── library.json            # { name, version, createdAt, itemCount }
-├── tags.json               # canonical tag list
-├── filters.json            # smart folders (saved filters)
-├── folders.json            # folders
-├── pre/                     # bucket for names starting "pre"
-│   ├── preview-l9x2ka.json  # one metadata file per item — this is the index
-│   ├── preview-l9x2ka.png   # the original (omitted for Linked imports)
-│   └── preview-l9x2ka.webp  # its thumbnail
+├── library.json             # name, version, createdAt, itemCount
+├── tags.json                # tag list
+├── filters.json             # smart folders
+├── folders.json             # folders
+├── pre/                     # files whose names start with "pre"
+│   ├── preview-l9x2ka.json  # one metadata file per item
+│   ├── preview-l9x2ka.png   # the original (left out for linked imports)
+│   └── preview-l9x2ka.webp  # the thumbnail
 └── mov/
     ├── movie-k1p8.json
     ├── movie-k1p8.mov
     └── movie-k1p8.webp
 ```
 
-`<id>` is `<slug-of-name>-<base36-timestamp><rand>`, e.g. `preview-l9x2ka` — readable in Finder,
-sortable, and collision-resistant. Older libraries (with the previous flat `items/` + `originals/`
-+ `thumbnails/` layout) are **migrated automatically** the first time they're opened.
+Libraries in the older `items/`, `originals/`, and `thumbnails/` layout are migrated the first time they're opened.
 
-## Tech stack
+## Run from source
 
-- **Electron** with a strict, isolated renderer (`contextIsolation`, no `nodeIntegration`).
-- **electron-vite** build (main / preload / renderer).
-- **Svelte 5 + TypeScript** UI.
-- **sharp** for image thumbnails, palette, and cropping.
-- Assets are served to the UI over a custom `asset://` protocol (with HTTP Range support for
-  video/audio streaming) — no `file://`, no `webSecurity` hacks.
-
-## Run
-
-Needs **Node.js** (this is not a static-server project — it has a build step).
+You need Node.js.
 
 ```bash
-npm install      # downloads Electron + sharp prebuilt binaries
-npm run dev      # launches the Electron app with hot reload
+git clone https://github.com/DyskLab/dyskfiles.git
+cd dyskfiles
+npm install
+npm run dev
 ```
 
-Other scripts:
-
-```bash
-npm run build    # bundle main + preload + renderer into out/
-npm run check    # svelte-check type checking (target: 0 errors / 0 warnings)
-```
+| Command | What it does |
+| --- | --- |
+| `npm run build` | Bundles the app into `out/` |
+| `npm run check` | Runs `svelte-check` |
+| `npm run dist` | Builds the Apple Silicon DMG into `dist/` |
 
 ## Project structure
 
-- **main** (`src/main/`) owns all filesystem access: `library.ts` (create/open/list/import/crop/
-  delete + the per-bucket storage), `thumbnail.ts` (sharp), `config.ts` (remembers the last library
-  and UI prefs), and `index.ts` (window, IPC handlers, `asset://` protocol, app icon).
-- **preload** (`src/preload/`) exposes a small typed `window.rak` API over `contextBridge`.
-- **renderer** (`src/renderer/`) is the Svelte UI: `Welcome`, `Sidebar`, `Toolbar`, `FilterBar`,
-  `Grid`, `Inspector`, `Lightbox`, `MediaPlayer`, `CodeEditor`, `SearchPalette`, `TagsPage`, and more.
-
----
+- **`src/main/`** owns all file access: libraries and storage (`library.ts`), thumbnails (`thumbnail.ts`), saved
+  settings (`config.ts`), and the window, IPC handlers, and `asset://` protocol (`index.ts`).
+- **`src/preload/`** exposes a small typed `window.rak` API through `contextBridge`.
+- **`src/renderer/`** is the Svelte 5 and TypeScript interface.
 
 ## Support
 
-If DyskFiles is useful to you, you can support its development on [Buy Me a Coffee](https://buymeacoffee.com/fannydevz).
+DyskFiles is free and open source. If it helps you, you can
+[buy me a coffee](https://buymeacoffee.com/fannydevz).
 
----
+## Part of DyskLab
 
-Part of the [one-day-one-code](https://github.com/FannyDevz) daily experiments — the one project
-built as a real desktop app.
+DyskFiles is part of [DyskLab](https://www.fanny.dev/dysklab), alongside
+[DyskFlow](https://github.com/DyskLab/dyskflow), [DyskFocus](https://github.com/DyskLab/dyskfocus), and DyskLink for
+[Mac](https://github.com/DyskLab/dysklink-mac) and [Android](https://github.com/DyskLab/dysklink-android).
+
+## License
+
+[MIT](LICENSE)

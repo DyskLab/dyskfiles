@@ -222,9 +222,28 @@
     {/each}
   {/if}
   </div>
+  <a class="support" href="https://buymeacoffee.com/fannydevz" target="_blank" rel="noopener">
+    <Icon name="heart" size={14} />
+    <span>Support DyskFiles</span>
+  </a>
 </aside>
 
 <style>
+  .support {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+    text-decoration: none;
+  }
+  .support:hover {
+    color: var(--text);
+  }
+
   .sidebar {
     background: var(--sidebar);
     border-right: 1px solid var(--border);

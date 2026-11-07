@@ -3,7 +3,7 @@ import { basename, extname, join } from 'path'
 import sharp from 'sharp'
 import { makeThumbnail, makeThumbnailFromBuffer } from './thumbnail'
 
-export const DEFAULT_ICON = 'chicken'
+export const DEFAULT_ICON = 'folder'
 
 export interface Library {
   name: string
@@ -279,7 +279,7 @@ async function loadLibraryMeta(libPath: string): Promise<Library> {
 
 export async function createLibrary(parentDir: string, name: string): Promise<Library> {
   const cleanName = name.trim() || 'Untitled'
-  const folderName = `${slugify(cleanName)}.pitek`
+  const folderName = `${slugify(cleanName)}.dyskfiles`
   const libPath = join(parentDir, folderName)
 
   await fs.mkdir(libPath, { recursive: true })
@@ -609,9 +609,9 @@ export async function mergeInto(sourcePath: string, targetPath: string): Promise
 
 /** Permanently delete a library folder from disk. */
 export async function deleteLibraryFiles(libPath: string): Promise<void> {
-  // Safety: only delete something that actually looks like a Pitek library.
+  // Safety: only delete something that actually looks like a DyskFiles library.
   if (!(await exists(libraryJsonPath(libPath)))) {
-    throw new Error('Refusing to delete: not a Pitek library')
+    throw new Error('Refusing to delete: not a DyskFiles library')
   }
   await fs.rm(libPath, { recursive: true, force: true })
   if (currentLibraryPath === libPath) currentLibraryPath = null

@@ -2,7 +2,7 @@
   // Lucide-style monochrome line icons. Each entry is the inner markup of a
   // 24×24 stroke SVG (stroke = currentColor). Dots use an explicit fill.
   export const ICONS: Record<string, string> = {
-    // ---- brand: ayam jago (rooster) ----
+    // ---- kept for libraries that already use it ----
     chicken: `<g fill="currentColor" stroke="none"><path d="M6.5 6.6 7 4.3 8 5.9 8.8 3.9 9.6 5.7 10.6 4.3 11 6.6Z"/><circle cx="8.5" cy="8.6" r="2.7"/><polygon points="3.2,8.7 6,7.7 6,9.9"/><path d="M5.6 9.7c-.3 1.6 1.1 1.8 1.3 .3z"/><path d="M9 9.6c2.5-.7 5 .1 6.4 2.1 1.2 1.7 1.2 4 0 5.8-1.1 1.6-3 2.4-5 2.2-2.8-.3-4.8-2.4-4.8-5.2 0-2.2 1.3-4.1 3.4-4.9z"/><path d="M14.5 12c3.5.5 6.5-2 7-7-.7-.4-1.5-.2-2.1.4 .6 1.6 0 3.2-1.4 4.2-1-.8-2.2-.6-3 .2 .8 .6 .6 1.6-.5 2.2z"/><path d="M14 13c2.8.2 5-1.8 5.4-5-.8.6-1.6.8-2.4 1.6 .8 .4 .8 1.4 0 2-1 -.4-2 .2-3 1.4z"/></g><path d="M10 19.4v2.6M12.8 19.4v2.6M8.8 22h2.4M11.6 22h2.4" fill="none" stroke="currentColor" stroke-width="1.6"/>`,
     // ---- UI ----
     grid: `<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>`,

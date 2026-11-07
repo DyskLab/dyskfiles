@@ -103,7 +103,7 @@ const MIME_TO_EXT: Record<string, string> = {
   'application/javascript': '.js'
 }
 
-// Brand app icon (the red rooster), embedded as a data URL so it survives the
+// Brand app icon, embedded as a data URL so it survives the
 // build and needs no external file.
 let appIcon: Electron.NativeImage | null = null
 function buildAppIcon(): Electron.NativeImage | null {
@@ -140,15 +140,21 @@ function createWindow(): BrowserWindow {
 
   win.once('ready-to-show', () => win.show())
 
-  // Dev utility: PITEK_SHOT=<path> captures the window to a PNG then quits.
-  // Optionally PITEK_SHOT_CLICK=<css selector> is clicked first (e.g. to open a menu).
-  if (process.env.PITEK_SHOT) {
+  // Links such as the support page open in the default browser, not in a new app window.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://')) shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  // Dev utility: DYSKFILES_SHOT=<path> captures the window to a PNG then quits.
+  // Optionally DYSKFILES_SHOT_CLICK=<css selector> is clicked first (e.g. to open a menu).
+  if (process.env.DYSKFILES_SHOT) {
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         try {
-          if (process.env.PITEK_SHOT_CLICK) {
+          if (process.env.DYSKFILES_SHOT_CLICK) {
             // '|'-separated selectors clicked in sequence. Prefix 'dbl:' to double-click.
-            for (const raw of process.env.PITEK_SHOT_CLICK.split('|')) {
+            for (const raw of process.env.DYSKFILES_SHOT_CLICK.split('|')) {
               const dbl = raw.startsWith('dbl:')
               const isJs = raw.startsWith('js:')
               const sel = dbl ? raw.slice(4) : raw
@@ -162,14 +168,14 @@ function createWindow(): BrowserWindow {
               await new Promise((r) => setTimeout(r, 500))
             }
           }
-          if (process.env.PITEK_SHOT_SCROLL) {
+          if (process.env.DYSKFILES_SHOT_SCROLL) {
             await win.webContents.executeJavaScript(
-              `(() => { const el = document.querySelector('.grid-wrap'); if (el) el.scrollTop = ${Number(process.env.PITEK_SHOT_SCROLL)}; return el ? el.scrollTop : -1 })()`
+              `(() => { const el = document.querySelector('.grid-wrap'); if (el) el.scrollTop = ${Number(process.env.DYSKFILES_SHOT_SCROLL)}; return el ? el.scrollTop : -1 })()`
             )
             await new Promise((r) => setTimeout(r, 250))
           }
           const img = await win.webContents.capturePage()
-          await fs.writeFile(process.env.PITEK_SHOT as string, img.toPNG())
+          await fs.writeFile(process.env.DYSKFILES_SHOT as string, img.toPNG())
         } finally {
           app.quit()
         }
@@ -298,7 +304,7 @@ function registerIpc(): void {
 
   ipcMain.handle('library:open', async (): Promise<Library | null> => {
     const result = await dialog.showOpenDialog({
-      title: 'Open a library (.pitek folder)',
+      title: 'Open a library folder',
       properties: ['openDirectory']
     })
     if (result.canceled || !result.filePaths[0]) return null
@@ -307,7 +313,7 @@ function registerIpc(): void {
       await rememberLibrary({ path: lib.path, name: lib.name, icon: lib.icon })
       return lib
     } catch {
-      await dialog.showErrorBox('Not a Pitek library', 'The chosen folder has no library.json.')
+      await dialog.showErrorBox('Not a DyskFiles library', 'The chosen folder has no library.json.')
       return null
     }
   })
@@ -367,7 +373,7 @@ function registerIpc(): void {
       if (!SUPPORTED_EXTS.includes(ext)) return []
       const rawName = basename(pathname) || `download${ext}`
       const fname = rawName.toLowerCase().endsWith(ext) ? rawName : `${rawName}${ext}`
-      const dir = await fs.mkdtemp(join(os.tmpdir(), 'pitek-dl-'))
+      const dir = await fs.mkdtemp(join(os.tmpdir(), 'dyskfiles-dl-'))
       const tmp = join(dir, fname)
       await fs.writeFile(tmp, buf)
       const items = await importPaths([tmp])
@@ -555,7 +561,7 @@ function registerIpc(): void {
                     cancelId: 0,
                     message: 'Delete this library from disk?',
                     detail:
-                      'This permanently removes the .pitek folder and all its files. This cannot be undone.'
+                      'This permanently removes the library folder and all its files. This cannot be undone.'
                   }
                   const { response } = win
                     ? await dialog.showMessageBox(win, opts)

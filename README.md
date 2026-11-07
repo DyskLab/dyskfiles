@@ -1,19 +1,23 @@
-# Pitek 🐔
+# DyskFiles
+
+<p><img src="build/icon.png" width="96" alt="DyskFiles"></p>
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=000)](https://buymeacoffee.com/fannydevz)
 
 An **Eagle-style desktop asset manager**. Create a *library*, drag in your images, videos,
-audio, and text files, and Pitek indexes them into a **tidy, human-readable folder** on disk —
+audio, and text files, and DyskFiles indexes them into a **tidy, human-readable folder** on disk —
 thumbnails + JSON, no database.
 
-![Pitek — grid view](docs/screenshots/01-grid.png)
+![DyskFiles — grid view](docs/screenshots/01-grid.png)
 
-> Unlike Eagle (which stores items in randomly-named `xxxx.info/` folders), Pitek keeps
+> Unlike Eagle (which stores items in randomly-named `xxxx.info/` folders), DyskFiles keeps
 > everything in flat, readable folders you can browse in Finder — grouped by the file name's
 > first three letters.
 
 ## Features
 
 **Libraries**
-- Create / open a `<name>.pitek` library that holds your whole collection.
+- Create / open a `<name>.dyskfiles` library that holds your whole collection. Libraries made before the rename (`<name>.pitek`) still open as they are.
 - Keep **multiple libraries** and switch between them from the sidebar; the last one reopens
   automatically on launch.
 - Per-library actions: change icon, reveal in Finder, merge into another library, remove, delete.
@@ -55,7 +59,7 @@ Everything for one item — its metadata JSON, the original, and the thumbnail �
 in a folder named after the file's **first three initials**. Files sharing initials share a folder:
 
 ```
-MyLibrary.pitek/
+MyLibrary.dyskfiles/
 ├── library.json            # { name, version, createdAt, itemCount }
 ├── tags.json               # canonical tag list
 ├── filters.json            # smart folders (saved filters)
@@ -107,6 +111,12 @@ npm run check    # svelte-check type checking (target: 0 errors / 0 warnings)
 - **preload** (`src/preload/`) exposes a small typed `window.rak` API over `contextBridge`.
 - **renderer** (`src/renderer/`) is the Svelte UI: `Welcome`, `Sidebar`, `Toolbar`, `FilterBar`,
   `Grid`, `Inspector`, `Lightbox`, `MediaPlayer`, `CodeEditor`, `SearchPalette`, `TagsPage`, and more.
+
+---
+
+## Support
+
+If DyskFiles is useful to you, you can support its development on [Buy Me a Coffee](https://buymeacoffee.com/fannydevz).
 
 ---
 

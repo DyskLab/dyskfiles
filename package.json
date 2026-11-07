@@ -1,7 +1,8 @@
 {
-  "name": "pitek",
+  "name": "dyskfiles",
+  "productName": "DyskFiles",
   "version": "0.1.0",
-  "description": "Pitek — an Eagle-style desktop asset manager: create a library, drag in images, browse a tidy human-readable index (thumbnails + JSON).",
+  "description": "DyskFiles — an Eagle-style desktop asset manager: create a library, drag in images, browse a tidy human-readable index (thumbnails + JSON).",
   "main": "./out/main/index.js",
   "author": "Fanny",
   "license": "MIT",

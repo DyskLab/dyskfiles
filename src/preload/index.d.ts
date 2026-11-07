@@ -75,9 +75,9 @@ interface RakApi {
   getCurrentLibrary(): Promise<RakLibrary | null>
   /** All libraries the app knows about, most-recent first. */
   listLibraries(): Promise<RakKnownLibrary[]>
-  /** Pick a parent folder and create `<name>.pitek` inside it. */
+  /** Pick a parent folder and create `<name>.dyskfiles` inside it. */
   createLibrary(name: string): Promise<RakLibrary | null>
-  /** Pick an existing `.pitek` folder and open it. */
+  /** Pick an existing `.dyskfiles` folder and open it. */
   openLibrary(): Promise<RakLibrary | null>
   /** Switch to a known library by its path. */
   switchLibrary(path: string): Promise<RakLibrary | null>

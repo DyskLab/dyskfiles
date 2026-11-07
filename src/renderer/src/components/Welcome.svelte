@@ -30,8 +30,8 @@
 
 <div class="welcome drag">
   <div class="card no-drag">
-    <div class="logo"><img src={LOGO_DATA_URL} alt="Pitek" /></div>
-    <h1>Pitek</h1>
+    <div class="logo"><img src={LOGO_DATA_URL} alt="DyskFiles" /></div>
+    <h1>DyskFiles</h1>
     <p class="tagline">An Eagle-style asset library. Everything lives in one tidy folder.</p>
 
     <label class="field">
@@ -45,9 +45,10 @@
     </div>
 
     <p class="hint">
-      Creates a <code>&lt;name&gt;.pitek</code> folder with <code>items/</code>,
+      Creates a <code>&lt;name&gt;.dyskfiles</code> folder with <code>items/</code>,
       <code>originals/</code> and <code>thumbnails/</code>.
     </p>
+    <a class="support" href="https://buymeacoffee.com/fannydevz" target="_blank" rel="noopener">Support DyskFiles</a>
   </div>
 </div>
 
@@ -151,6 +152,15 @@
     font-size: 11px;
     color: var(--text-faint);
     line-height: 1.6;
+  }
+  .support {
+    display: inline-block;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .support:hover {
+    color: var(--text);
   }
   code {
     background: var(--bg);

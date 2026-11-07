@@ -16,6 +16,8 @@ export interface AppConfig {
 }
 
 const CONFIG_FILE = () => join(app.getPath('userData'), 'rak-config.json')
+// Where the config lived before the app was renamed. Read once; the next write lands in CONFIG_FILE.
+const LEGACY_CONFIG_FILE = () => join(app.getPath('appData'), 'pitek', 'rak-config.json')
 
 const DEFAULT_CONFIG: AppConfig = {
   lastLibraryPath: null,
@@ -24,12 +26,15 @@ const DEFAULT_CONFIG: AppConfig = {
 }
 
 export async function readConfig(): Promise<AppConfig> {
-  try {
-    const raw = await fs.readFile(CONFIG_FILE(), 'utf-8')
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
-  } catch {
-    return { ...DEFAULT_CONFIG }
+  for (const file of [CONFIG_FILE(), LEGACY_CONFIG_FILE()]) {
+    try {
+      const raw = await fs.readFile(file, 'utf-8')
+      return { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
+    } catch {
+      // Missing or unreadable: try the next location.
+    }
   }
+  return { ...DEFAULT_CONFIG }
 }
 
 export async function writeConfig(patch: Partial<AppConfig>): Promise<void> {

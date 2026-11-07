@@ -108,7 +108,7 @@
 
 <div class="switcher" bind:this={rootEl}>
   <button class="trigger no-drag" onclick={toggle} title="Switch library" class:active={open}>
-    <span class="lib-icon"><Icon name={$library?.icon ?? 'chicken'} size={17} /></span>
+    <span class="lib-icon"><Icon name={$library?.icon ?? 'folder'} size={17} /></span>
     <span class="lib-name">{$library?.name}</span>
     <span class="chev"><Icon name="chevron" size={15} /></span>
   </button>

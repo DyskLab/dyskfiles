@@ -7,6 +7,7 @@
     duplicatesBusy,
     cacheBust,
     trashItem,
+    undoGroup,
     findDuplicates
   } from '../lib/store'
   import Icon from './Icon.svelte'
@@ -31,7 +32,9 @@
     if (busy) return
     busy = true
     try {
-      for (const it of group.slice(1)) await trashItem(it.id)
+      await undoGroup('trash duplicates', async () => {
+        for (const it of group.slice(1)) await trashItem(it.id)
+      })
       await findDuplicates() // refresh groups
     } finally {
       busy = false
@@ -41,7 +44,9 @@
     if (busy) return
     busy = true
     try {
-      for (const g of $duplicateGroups) for (const it of g.slice(1)) await trashItem(it.id)
+      await undoGroup('trash duplicates', async () => {
+        for (const g of $duplicateGroups) for (const it of g.slice(1)) await trashItem(it.id)
+      })
       await findDuplicates()
     } finally {
       busy = false

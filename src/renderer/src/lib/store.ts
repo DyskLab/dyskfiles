@@ -455,6 +455,7 @@ export async function loadLibraries(): Promise<void> {
 /** Set the active library, (re)load its items + trash + folders, refresh known list. */
 export async function useLibrary(lib: RakLibrary): Promise<void> {
   library.set(lib)
+  clearUndo()
   selectedId.set(null)
   view.set('all')
   await Promise.all([
@@ -627,12 +628,98 @@ export async function enrichThumbnails(): Promise<void> {
   }
 }
 
-/** Update an item's metadata (rating/tags/folder/comment/note/url) in place. */
-export async function updateItemMeta(id: string, patch: RakItemPatch): Promise<void> {
+// ---------- undo ----------
+//
+// Metadata edits, trashing and restoring push the step that reverses them.
+// Steps made inside `undoGroup` are undone together. The stack is per library.
+
+interface UndoStep {
+  label: string
+  run: () => Promise<void>
+}
+
+const UNDO_LIMIT = 100
+const undoStack: UndoStep[] = []
+let collecting: UndoStep[] | null = null
+/** Label of the step just undone, for a brief notice (cleared by the UI). */
+export const undoNotice = writable<string | null>(null)
+
+function pushUndo(step: UndoStep): void {
+  if (collecting) {
+    collecting.push(step)
+    return
+  }
+  undoStack.push(step)
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift()
+}
+
+/** Run `fn`, recording every undoable step it makes as one step. */
+export async function undoGroup(label: string, fn: () => Promise<void>): Promise<void> {
+  const outer = collecting
+  const steps: UndoStep[] = []
+  collecting = steps
+  try {
+    await fn()
+  } finally {
+    collecting = outer
+    if (steps.length) {
+      pushUndo({
+        label,
+        run: async () => {
+          for (const s of [...steps].reverse()) await s.run()
+        }
+      })
+    }
+  }
+}
+
+export function clearUndo(): void {
+  undoStack.length = 0
+}
+
+/** Undo the most recent step. Returns false when there is nothing to undo. */
+export async function undo(): Promise<boolean> {
+  const step = undoStack.pop()
+  if (!step) return false
+  try {
+    await step.run()
+    undoNotice.set(`Undid ${step.label}`)
+  } catch (err) {
+    console.error('Undo failed:', err)
+    undoNotice.set(`Could not undo ${step.label}`)
+  }
+  return true
+}
+
+const PATCH_LABELS: Record<string, string> = {
+  name: 'rename', rating: 'rating', tags: 'tag change', folderIds: 'folder change',
+  comment: 'comment', note: 'note', url: 'URL', duration: 'duration'
+}
+
+function same(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+}
+
+async function applyPatch(id: string, patch: RakItemPatch): Promise<void> {
   const updated = await window.rak.updateItem(id, patch)
   if (!updated) return
   items.update((cur) => cur.map((it) => (it.id === id ? updated : it)))
   trash.update((cur) => cur.map((it) => (it.id === id ? updated : it)))
+}
+
+/** Update an item's metadata (rating/tags/folder/comment/note/url) in place. */
+export async function updateItemMeta(id: string, patch: RakItemPatch): Promise<void> {
+  const before = [...get(items), ...get(trash)].find((it) => it.id === id)
+  const keys = (Object.keys(patch) as (keyof RakItemPatch)[]).filter(
+    (k) => before && !same(before[k], patch[k])
+  )
+  await applyPatch(id, patch)
+  if (!before || !keys.length) return
+  const previous = Object.fromEntries(keys.map((k) => [k, structuredClone(before[k])])) as RakItemPatch
+  pushUndo({
+    label: keys.length === 1 ? (PATCH_LABELS[keys[0]] ?? 'edit') : 'edit',
+    run: () => applyPatch(id, previous)
+  })
 }
 
 export async function addFolder(name: string): Promise<RakFolder> {
@@ -744,6 +831,14 @@ export async function trashItem(id: string): Promise<void> {
   await window.rak.trashItem(id)
   selectedId.update((cur) => (cur === id ? null : cur))
   await Promise.all([loadItems(), loadTrash()])
+  pushUndo({
+    label: 'move to trash',
+    run: async () => {
+      await window.rak.restoreItem(id)
+      await Promise.all([loadItems(), loadTrash()])
+      selectedId.set(id)
+    }
+  })
 }
 
 /** Restore an item from the trash. */
@@ -751,6 +846,13 @@ export async function restoreItem(id: string): Promise<void> {
   await window.rak.restoreItem(id)
   selectedId.update((cur) => (cur === id ? null : cur))
   await Promise.all([loadItems(), loadTrash()])
+  pushUndo({
+    label: 'restore',
+    run: async () => {
+      await window.rak.trashItem(id)
+      await Promise.all([loadItems(), loadTrash()])
+    }
+  })
 }
 
 /** Permanently delete a single trashed item. */

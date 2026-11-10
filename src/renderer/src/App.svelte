@@ -18,7 +18,9 @@
     filterBarOpen,
     useLibrary,
     loadPrefs,
-    markItemUsed
+    markItemUsed,
+    undo,
+    undoNotice
   } from './lib/store'
   import Welcome from './components/Welcome.svelte'
   import Sidebar from './components/Sidebar.svelte'
@@ -41,12 +43,29 @@
     $openId ? ([...$items, ...$trash].find((i) => i.id === $openId) ?? null) : null
   )
 
+  /** Text fields and the code editor keep their own undo. */
+  function editingText(t: EventTarget | null): boolean {
+    const el = t as HTMLElement | null
+    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+  }
+
   function onKey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    const mod = e.metaKey || e.ctrlKey
+    if (mod && e.key.toLowerCase() === 'f') {
       e.preventDefault()
       if ($library) searchOpen.set(true)
+    } else if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && $library && !editingText(e.target)) {
+      e.preventDefault()
+      undo()
     }
   }
+
+  // Show "Undid …" briefly.
+  $effect(() => {
+    if (!$undoNotice) return
+    const t = setTimeout(() => undoNotice.set(null), 1800)
+    return () => clearTimeout(t)
+  })
 
   onMount(async () => {
     loading.set(true)
@@ -112,6 +131,10 @@
 
   {#if $watchedOpen}
     <WatchedFolders />
+  {/if}
+
+  {#if $undoNotice}
+    <div class="progress-toast" role="status"><span>{$undoNotice}</span></div>
   {/if}
 
   {#if $eagleProgress}

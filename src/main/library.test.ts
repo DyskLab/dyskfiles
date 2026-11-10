@@ -392,8 +392,41 @@ describe('duplicates', () => {
     expect(groups[0].map((i) => i.name)).toEqual(['big', 'small']) // largest first
     // Hashes are stored, so the next run does not recompute them.
     const stored = await L.listItems()
-    expect(stored.every((i) => typeof i.dhash === 'string' && i.dhash.length === 16)).toBe(true)
+    expect(stored.every((i) => typeof i.dhash === 'string' && i.dhash.length === 32)).toBe(true)
     expect((await onDisk(lib.path, stored[0].id)).dhash).toBe(stored[0].dhash)
+  })
+})
+
+describe('similar: pictures that must stay apart', () => {
+  it('does not group flat pictures of different colors', async () => {
+    for (const [name, color] of [['red', '#e11d48'], ['green', '#16a34a'], ['purple', '#7c3aed']]) {
+      await png(`${name}.png`, 120, 90, color)
+    }
+    await L.createLibrary(root, 'Test')
+    await L.importPaths([src])
+    expect(await L.findSimilar()).toEqual([])
+  })
+
+  it('does not group pictures that differ only from top to bottom', async () => {
+    const band = (y: number): Buffer =>
+      Buffer.from(`<svg width="200" height="200"><rect width="200" height="200" fill="#111"/><rect x="0" y="${y}" width="200" height="60" fill="#22c55e"/></svg>`)
+    await sharp(band(0)).png().toFile(join(src, 'top.png'))
+    await sharp(band(140)).png().toFile(join(src, 'bottom.png'))
+    await L.createLibrary(root, 'Test')
+    await L.importPaths([src])
+    expect(await L.findSimilar()).toEqual([])
+  })
+
+  it('recomputes hashes stored in the old 64-bit format', async () => {
+    await png('a.png', 50, 50, '#123456')
+    const lib = await L.createLibrary(root, 'Test')
+    const [item] = await L.importPaths([src])
+    const raw = await onDisk(lib.path, item.id)
+    raw.dhash = '0000000000000000'
+    await fs.writeFile(join(lib.path, item.thumbnail.split(/[\\/]/)[0], `${item.id}.json`), JSON.stringify(raw))
+    await L.openLibrary(lib.path)
+    await L.findSimilar()
+    expect((await onDisk(lib.path, item.id)).dhash).toHaveLength(32)
   })
 })
 

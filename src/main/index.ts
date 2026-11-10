@@ -62,7 +62,7 @@ import { refreshFolderWatchers, stopWatchers, syncWatchers, watchItem } from './
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'asset',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true }
   }
 ])
 
@@ -243,14 +243,35 @@ function streamFile(filePath: string, start: number, end: number): ReadableStrea
   return Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream
 }
 
+// The renderer is a file:// page and asset:// is another origin, so responses must
+// allow it explicitly (Electron 45+ enforces CORS on custom schemes). Only this
+// app's own pages can reach the scheme, which is registered on its session alone.
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Range',
+  'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges'
+}
+
+function notFound(): Response {
+  return new Response('Not found', { status: 404, headers: CORS })
+}
+
 function registerAssetProtocol(): void {
   protocol.handle('asset', async (request) => {
+    // CORS preflight for requests that carry a Range header.
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 204,
+        headers: { ...CORS, 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS' }
+      })
+    }
+
     const url = new URL(request.url) // asset://<kind>/<id>
     const kind = url.hostname === 'original' ? 'original' : 'thumb'
     const id = decodeURIComponent(url.pathname.replace(/^\//, ''))
 
     const filePath = await resolveAsset(kind, id)
-    if (!filePath) return new Response('Not found', { status: 404 })
+    if (!filePath) return notFound()
 
     try {
       const mime = MIME[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
@@ -263,12 +284,13 @@ function registerAssetProtocol(): void {
         if (!r) {
           return new Response(null, {
             status: 416,
-            headers: { 'Content-Range': `bytes */${stat.size}` }
+            headers: { ...CORS, 'Content-Range': `bytes */${stat.size}` }
           })
         }
         return new Response(streamFile(filePath, r.start, r.end), {
           status: 206,
           headers: {
+            ...CORS,
             'Content-Type': mime,
             'Content-Range': `bytes ${r.start}-${r.end}/${stat.size}`,
             'Accept-Ranges': 'bytes',
@@ -279,13 +301,14 @@ function registerAssetProtocol(): void {
 
       return new Response(stat.size ? streamFile(filePath, 0, stat.size - 1) : null, {
         headers: {
+          ...CORS,
           'Content-Type': mime,
           'Accept-Ranges': 'bytes',
           'Content-Length': String(stat.size)
         }
       })
     } catch {
-      return new Response('Not found', { status: 404 })
+      return notFound()
     }
   })
 }

@@ -44,7 +44,7 @@ export interface Item {
   deletedAt: string | null // ISO timestamp when moved to trash, else null
   linked: boolean // true = `original` is an absolute path to an external file (not copied in)
   eagleId?: string // id of the Eagle item this was imported from (prevents double imports)
-  dhash?: string // 64-bit difference hash of the thumbnail, hex (for "similar" detection)
+  dhash?: string // 128-bit difference hash of the thumbnail, hex (for "similar" detection)
 }
 
 export interface Folder {
@@ -1151,23 +1151,26 @@ export async function findDuplicates(): Promise<Item[][]> {
   return groups
 }
 
-/** 64-bit difference hash of an image file, as 16 hex characters. */
+/**
+ * 128-bit difference hash of an image file, as 32 hex characters: 64 bits of
+ * left-to-right gradients followed by 64 bits of top-to-bottom gradients. Using
+ * both directions keeps pictures that only differ vertically apart.
+ */
 export async function dhashFile(path: string): Promise<string> {
-  const data = await sharp(path, { failOn: 'none' })
-    .resize(9, 8, { fit: 'fill' })
-    .grayscale()
-    .raw()
-    .toBuffer()
+  const gray = (w: number, h: number): Promise<Buffer> =>
+    sharp(path, { failOn: 'none' }).resize(w, h, { fit: 'fill' }).grayscale().raw().toBuffer()
+  const [wide, tall] = await Promise.all([gray(9, 8), gray(8, 9)])
+  const bits: number[] = []
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) bits.push(wide[r * 9 + c] > wide[r * 9 + c + 1] ? 1 : 0)
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) bits.push(tall[r * 8 + c] > tall[(r + 1) * 8 + c] ? 1 : 0)
   let hex = ''
-  for (let row = 0; row < 8; row++) {
-    let byte = 0
-    for (let col = 0; col < 8; col++) {
-      byte = (byte << 1) | (data[row * 9 + col] > data[row * 9 + col + 1] ? 1 : 0)
-    }
-    hex += byte.toString(16).padStart(2, '0')
+  for (let i = 0; i < bits.length; i += 4) {
+    hex += ((bits[i] << 3) | (bits[i + 1] << 2) | (bits[i + 2] << 1) | bits[i + 3]).toString(16)
   }
   return hex
 }
+
+const DHASH_HEX = 32
 
 function popcount32(n: number): number {
   n = n - ((n >>> 1) & 0x55555555)
@@ -1175,40 +1178,58 @@ function popcount32(n: number): number {
   return (((n + (n >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24
 }
 
+/** Distance between two #rrggbb colors (0–441). */
+function colorDistance(a: string, b: string): number {
+  const p = (h: string, i: number): number => parseInt(h.slice(1 + i * 2, 3 + i * 2), 16)
+  return Math.hypot(p(a, 0) - p(b, 0), p(a, 1) - p(b, 1), p(a, 2) - p(b, 2))
+}
+
 /**
- * Groups of visually similar images and videos (2+ per group), by comparing the
- * difference hashes of their thumbnails: `maxDistance` is how many of the 64 bits
- * may differ. Hashes are computed once and stored on the item.
+ * Groups of visually similar images and videos (2+ per group). Two items match
+ * when their thumbnails' 128-bit difference hashes differ in at most
+ * `maxDistance` bits and their dominant colors are close — the color check is
+ * what keeps flat pictures of different colors (which hash alike) apart.
+ * Hashes are computed once and stored on the item.
  */
-export async function findSimilar(maxDistance = 8): Promise<Item[][]> {
+export async function findSimilar(maxDistance = 12, maxColorDistance = 80): Promise<Item[][]> {
   const libPath = requireCurrent()
   const items = (await readItemsAt(libPath)).filter(
     (it) => !it.deletedAt && it.thumbnail && (it.kind === 'image' || it.kind === 'video')
   )
   await forEachLimit(items, 8, async (it) => {
-    if (it.dhash) return
+    if (it.dhash?.length === DHASH_HEX) return
     try {
       it.dhash = await dhashFile(join(libPath, it.thumbnail))
       await saveItem(libPath, it)
     } catch {
-      // Thumbnail missing or unreadable — leave it out.
+      delete it.dhash // Thumbnail missing or unreadable — leave it out.
     }
   })
-  const hashed = items.filter((it) => it.dhash)
-  const hi = hashed.map((it) => parseInt(it.dhash!.slice(0, 8), 16) | 0)
-  const lo = hashed.map((it) => parseInt(it.dhash!.slice(8), 16) | 0)
+  const hashed = items.filter((it) => it.dhash?.length === DHASH_HEX)
+  const words = hashed.map((it) =>
+    [0, 8, 16, 24].map((o) => parseInt(it.dhash!.slice(o, o + 8), 16) | 0)
+  )
 
-  // Union-find over every pair within the distance.
+  // Union-find over every matching pair.
   const parent = hashed.map((_, i) => i)
   const find = (i: number): number => {
     while (parent[i] !== i) i = parent[i] = parent[parent[i]]
     return i
   }
   for (let i = 0; i < hashed.length; i++) {
+    const wi = words[i]
     for (let j = i + 1; j < hashed.length; j++) {
-      if (popcount32(hi[i] ^ hi[j]) + popcount32(lo[i] ^ lo[j]) <= maxDistance) {
-        parent[find(i)] = find(j)
-      }
+      const wj = words[j]
+      const d =
+        popcount32(wi[0] ^ wj[0]) +
+        popcount32(wi[1] ^ wj[1]) +
+        popcount32(wi[2] ^ wj[2]) +
+        popcount32(wi[3] ^ wj[3])
+      if (d > maxDistance) continue
+      const ca = hashed[i].color
+      const cb = hashed[j].color
+      if (ca && cb && colorDistance(ca, cb) > maxColorDistance) continue
+      parent[find(i)] = find(j)
     }
   }
   const byRoot = new Map<number, Item[]>()

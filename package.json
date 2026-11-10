@@ -1,7 +1,7 @@
 {
   "name": "dyskfiles",
   "productName": "DyskFiles",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DyskFiles — an Eagle-style desktop asset manager: create a library, drag in images, browse a tidy human-readable index (thumbnails + JSON).",
   "main": "./out/main/index.js",
   "author": "Fanny",

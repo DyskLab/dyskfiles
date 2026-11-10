@@ -708,6 +708,14 @@ export async function emptyCacheReload(): Promise<void> {
   enrichThumbnails()
 }
 
+/** "Check Library…": the main process shows the report; reload if it repaired anything. */
+export async function checkLibrary(): Promise<void> {
+  if (!(await window.rak.checkLibrary())) return
+  await Promise.all([refresh(), loadFolders(), loadTags()])
+  cacheBust.update((n) => n + 1)
+  enrichThumbnails()
+}
+
 /** Persist a new manual ordering (full list of ids, first = top-left). */
 export async function applyOrder(orderedIds: string[]): Promise<void> {
   const rank = new Map(orderedIds.map((id, i) => [id, i]))

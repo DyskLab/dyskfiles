@@ -101,6 +101,8 @@ interface RakApi {
   revealLibrary(path: string): Promise<void>
   /** Rebuild all thumbnails for the current library; returns the refreshed items. */
   rebuildThumbnails(): Promise<RakItem[]>
+  /** Check the library and offer to repair it; true when something was repaired. */
+  checkLibrary(): Promise<boolean>
   /** Show the native per-library context menu; resolves with the chosen action. */
   libraryContextMenu(path: string): Promise<RakContextResult | null>
   /** Active (non-trashed) items in the current library. */

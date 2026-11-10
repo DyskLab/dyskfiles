@@ -38,6 +38,9 @@ On Intel Macs, [run it from source](#run-from-source).
 **Libraries**
 - Keep several `<name>.dyskfiles` libraries and switch between them from the sidebar. The last one reopens on launch.
 - Change a library's icon, reveal it in Finder, merge it into another library, remove it, or delete it.
+- **Check Library** finds missing thumbnails, unreadable or stray files, leftovers from interrupted saves, and links to
+  deleted folders or unlisted tags, and repairs them. Nothing is deleted: stray files go to `lost-found/`, and items
+  whose original is gone are listed for you to deal with.
 - Libraries made before the rename (`<name>.pitek`) open as they are.
 
 **Importing**
@@ -85,6 +88,7 @@ MyLibrary.dyskfiles/
 ├── filters.json             # smart folders
 ├── folders.json             # folders
 ├── watch.json               # watched folders for Auto Import
+├── lost-found/              # files moved aside by Check Library (only if needed)
 ├── pre/                     # files whose names start with "pre"
 │   ├── preview-l9x2ka.json  # one metadata file per item
 │   ├── preview-l9x2ka.png   # the original (left out for linked imports)

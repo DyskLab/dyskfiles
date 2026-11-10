@@ -186,12 +186,16 @@ async function writeMeta(libPath: string, meta: LibraryMeta): Promise<void> {
   await writeJson(libraryJsonPath(libPath), meta)
 }
 
+/** Where the library doctor moves files it cannot place, instead of deleting them. */
+const LOST_FOUND = 'lost-found'
+
 const RESERVED_ENTRIES = new Set([
   'library.json',
   'tags.json',
   'filters.json',
   'folders.json',
-  'watch.json'
+  'watch.json',
+  LOST_FOUND
 ])
 
 /** Scan every item metadata file in a library from disk, keyed by id. */
@@ -1107,6 +1111,169 @@ export async function refreshItemFromDisk(id: string, since: FileStamp): Promise
   }
   await saveItem(libPath, item)
   return item
+}
+
+// ---------- library doctor ----------
+
+export interface DoctorReport {
+  items: number
+  /** Items whose original file is gone (linked files that were moved, mostly). Never changed. */
+  missingOriginals: { id: string; name: string; path: string; linked: boolean }[]
+  /** Items whose thumbnail file is gone. */
+  missingThumbnails: number
+  /** Item metadata files that cannot be read (paths relative to the library). */
+  corrupt: string[]
+  /** Readable item metadata stored under the wrong file name. */
+  misplaced: string[]
+  /** Files in item folders that no item refers to. */
+  orphans: string[]
+  /** Leftover temp files from interrupted writes. */
+  tempFiles: string[]
+  /** Items that point at folders which no longer exist. */
+  danglingFolders: number
+  /** Tags used on items but missing from the tag list. */
+  unlistedTags: string[]
+  /** library.json's item count is out of date. */
+  wrongCount: boolean
+  /** Whether the fixable problems were repaired in this run. */
+  repaired: boolean
+}
+
+/** Number of problems `checkLibrary({ repair: true })` can fix. */
+export function fixableCount(r: DoctorReport): number {
+  return (
+    r.missingThumbnails +
+    r.corrupt.length +
+    r.misplaced.length +
+    r.orphans.length +
+    r.tempFiles.length +
+    r.danglingFolders +
+    r.unlistedTags.length +
+    (r.wrongCount ? 1 : 0)
+  )
+}
+
+async function moveToLostFound(libPath: string, rel: string): Promise<void> {
+  const dest = join(libPath, LOST_FOUND, rel)
+  await fs.mkdir(join(dest, '..'), { recursive: true })
+  let target = dest
+  for (let n = 1; await exists(target); n++) target = `${dest}.${n}`
+  await fs.rename(join(libPath, rel), target)
+}
+
+/**
+ * Check the open library for problems and, with `repair`, fix what can be fixed
+ * safely. Nothing is deleted except temp files: unreadable metadata and stray
+ * files are moved to `lost-found/`, and missing originals are only reported.
+ */
+export async function checkLibrary({ repair = false } = {}): Promise<DoctorReport> {
+  const libPath = requireCurrent()
+  // Read from disk, not the cache, so edits made outside the app are seen.
+  invalidateItems(libPath)
+  const items = await readItemsAt(libPath)
+  const report: DoctorReport = {
+    items: items.length,
+    missingOriginals: [],
+    missingThumbnails: 0,
+    corrupt: [],
+    misplaced: [],
+    orphans: [],
+    tempFiles: [],
+    danglingFolders: 0,
+    unlistedTags: [],
+    wrongCount: false,
+    repaired: repair
+  }
+
+  // Files on disk: every item folder, plus temp files at the top level.
+  const referenced = new Set<string>()
+  for (const it of items) {
+    referenced.add(`${bucketFor(it.id)}/${it.id}.json`)
+    if (!it.linked && it.original) referenced.add(it.original.split(/[\\/]/).join('/'))
+    if (it.thumbnail) referenced.add(it.thumbnail.split(/[\\/]/).join('/'))
+  }
+  const top = await fs.readdir(libPath, { withFileTypes: true }).catch(() => [])
+  for (const e of top) {
+    if (e.isFile() && e.name.endsWith('.tmp')) report.tempFiles.push(e.name)
+  }
+  const buckets = top.filter((e) => e.isDirectory() && !RESERVED_ENTRIES.has(e.name))
+  for (const b of buckets) {
+    const files = await fs.readdir(join(libPath, b.name), { withFileTypes: true }).catch(() => [])
+    for (const f of files) {
+      if (!f.isFile() || f.name.startsWith('.')) continue
+      const rel = `${b.name}/${f.name}`
+      if (f.name.endsWith('.tmp')) report.tempFiles.push(rel)
+      else if (referenced.has(rel)) continue
+      else if (!f.name.endsWith('.json')) report.orphans.push(rel)
+      else {
+        const raw = await readJson<{ id?: unknown }>(join(libPath, rel)).catch(() => null)
+        if (raw && typeof raw.id === 'string' && items.some((it) => it.id === raw.id)) {
+          report.misplaced.push(rel)
+        } else {
+          report.corrupt.push(rel)
+        }
+      }
+    }
+  }
+
+  // Per-item checks.
+  const folderIds = new Set((await listFolders()).map((f) => f.id))
+  const listed = new Set(await listTags())
+  const unlisted = new Set<string>()
+  const thumbless: Item[] = []
+  const danglers: Item[] = []
+  await forEachLimit(items, 16, async (it) => {
+    const original = originalAbs(libPath, it)
+    if (!(await exists(original))) {
+      report.missingOriginals.push({ id: it.id, name: `${it.name}.${it.ext}`, path: original, linked: it.linked })
+    }
+    if (it.thumbnail && !(await exists(join(libPath, it.thumbnail)))) thumbless.push(it)
+    if ((it.folderIds ?? []).some((id) => !folderIds.has(id))) danglers.push(it)
+    for (const t of it.tags ?? []) if (!listed.has(t)) unlisted.add(t)
+  })
+  report.missingOriginals.sort((a, b) => a.name.localeCompare(b.name))
+  report.missingThumbnails = thumbless.length
+  report.danglingFolders = danglers.length
+  report.unlistedTags = [...unlisted].sort()
+  const active = items.filter((it) => !it.deletedAt).length
+  report.wrongCount = (await readMeta(libPath)).itemCount !== active
+
+  if (!repair) return report
+
+  for (const rel of report.tempFiles) await fs.rm(join(libPath, rel), { force: true })
+  for (const rel of report.misplaced) {
+    // Write the item where it belongs before moving the stray copy aside.
+    const raw = await readJson<{ id: string }>(join(libPath, rel))
+    const item = await readItem(libPath, raw.id)
+    if (item) await saveItem(libPath, item)
+  }
+  for (const rel of [...report.corrupt, ...report.misplaced, ...report.orphans]) {
+    await moveToLostFound(libPath, rel).catch((err) => console.error(`Cannot move ${rel}:`, err))
+  }
+  for (const it of thumbless) {
+    // Images are redrawn here; for other kinds the window renders a new one.
+    if (it.kind === 'image' && (await exists(originalAbs(libPath, it)))) {
+      try {
+        await makeThumbnail(originalAbs(libPath, it), join(libPath, it.thumbnail))
+        continue
+      } catch {
+        // Fall through: clear it so the item shows its icon.
+      }
+    }
+    it.thumbnail = ''
+    delete it.dhash
+    await saveItem(libPath, it)
+  }
+  for (const it of danglers) {
+    const fresh = (await readItem(libPath, it.id)) ?? it
+    fresh.folderIds = fresh.folderIds.filter((id) => folderIds.has(id))
+    await saveItem(libPath, fresh)
+  }
+  if (unlisted.size) {
+    await writeJson(join(libPath, 'tags.json'), [...listed, ...report.unlistedTags])
+  }
+  if (report.wrongCount) await updateItemCount(libPath)
+  return report
 }
 
 // ---------- duplicates ----------

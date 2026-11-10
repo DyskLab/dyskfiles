@@ -54,6 +54,9 @@ import {
   listWatched,
   addWatched,
   removeWatched,
+  checkLibrary,
+  fixableCount,
+  type DoctorReport,
   type Library
 } from './library'
 import { refreshFolderWatchers, stopWatchers, syncWatchers, watchItem } from './watcher'
@@ -315,6 +318,24 @@ function registerAssetProtocol(): void {
 
 // ---------- IPC ----------
 
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`
+}
+
+/** One line per fixable problem in a doctor report. */
+function doctorLines(r: DoctorReport): string[] {
+  const out: string[] = []
+  if (r.missingThumbnails) out.push(`${plural(r.missingThumbnails, 'thumbnail is', 'thumbnails are')} missing.`)
+  if (r.corrupt.length) out.push(`${plural(r.corrupt.length, 'metadata file is', 'metadata files are')} unreadable.`)
+  if (r.misplaced.length) out.push(`${plural(r.misplaced.length, 'item is', 'items are')} saved under the wrong file name.`)
+  if (r.orphans.length) out.push(`${plural(r.orphans.length, 'file does', 'files do')} not belong to any item.`)
+  if (r.tempFiles.length) out.push(`${plural(r.tempFiles.length, 'temp file was', 'temp files were')} left by an interrupted save.`)
+  if (r.danglingFolders) out.push(`${plural(r.danglingFolders, 'item points', 'items point')} at a deleted folder.`)
+  if (r.unlistedTags.length) out.push(`${plural(r.unlistedTags.length, 'tag is', 'tags are')} missing from the tag list.`)
+  if (r.wrongCount) out.push('The item count in library.json is out of date.')
+  return out
+}
+
 interface KnownLibrary {
   path: string
   name: string
@@ -469,6 +490,55 @@ function registerIpc(): void {
     const err = await shell.openPath(abs)
     if (!err) await watchItem(id, abs)
     return err || null
+  })
+
+  // Check the library for problems; offer to repair the ones that can be fixed.
+  // Returns true when anything was repaired (the window then reloads its items).
+  ipcMain.handle('library:check', async (e) => {
+    if (!getCurrentPath()) return false
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const show = (opts: Electron.MessageBoxOptions): Promise<Electron.MessageBoxReturnValue> =>
+      win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)
+    const report = await checkLibrary()
+    const fixable = fixableCount(report)
+    const lines = doctorLines(report)
+    const missing = report.missingOriginals
+    if (missing.length) {
+      const names = missing.slice(0, 8).map((m) => `  • ${m.name}${m.linked ? ' (linked)' : ''}`)
+      if (missing.length > 8) names.push(`  … and ${missing.length - 8} more`)
+      lines.push(
+        `${plural(missing.length, 'item has', 'items have')} lost the original file. ` +
+          'These are left as they are; re-link or trash them yourself:',
+        ...names
+      )
+    }
+    if (!fixable && !missing.length) {
+      await show({ type: 'info', message: 'No problems found', detail: `All ${report.items} items look fine.` })
+      return false
+    }
+    if (!fixable) {
+      await show({ type: 'warning', message: 'Nothing to repair', detail: lines.join('\n') })
+      return false
+    }
+    const { response } = await show({
+      type: 'question',
+      buttons: ['Cancel', 'Repair'],
+      defaultId: 1,
+      cancelId: 0,
+      message: `Found ${plural(fixable, 'problem', 'problems')} that can be repaired`,
+      detail:
+        lines.join('\n') +
+        '\n\nUnreadable and stray files are moved to the lost-found folder inside the library, not deleted.'
+    })
+    if (response !== 1) return false
+    const after = await checkLibrary({ repair: true }).then(() => checkLibrary())
+    const left = fixableCount(after)
+    await show({
+      type: left ? 'warning' : 'info',
+      message: left ? 'Repaired, with problems left' : 'Library repaired',
+      detail: left ? doctorLines(after).join('\n') : `${plural(fixable, 'problem was', 'problems were')} fixed.`
+    })
+    return true
   })
 
   // Import an Eagle library (read-only): pick the .library folder, confirm, import.

@@ -12,6 +12,7 @@ const api: RakApi = {
     ipcRenderer.invoke('library:merge', sourcePath, targetPath),
   revealLibrary: (path) => ipcRenderer.invoke('library:reveal', path),
   rebuildThumbnails: () => ipcRenderer.invoke('library:rebuildThumbnails'),
+  checkLibrary: (): Promise<boolean> => ipcRenderer.invoke('library:check'),
   libraryContextMenu: (path) => ipcRenderer.invoke('library:contextMenu', path),
   listItems: () => ipcRenderer.invoke('items:list'),
   listTrash: () => ipcRenderer.invoke('items:listTrash'),

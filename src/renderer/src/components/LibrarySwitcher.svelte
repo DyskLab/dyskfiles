@@ -5,7 +5,8 @@
     switchTo,
     useLibrary,
     libraryMenu,
-    emptyCacheReload
+    emptyCacheReload,
+    checkLibrary
   } from '../lib/store'
   import Icon from './Icon.svelte'
 
@@ -94,6 +95,18 @@
     close()
   }
 
+  let checking = $state(false)
+  async function check() {
+    if (checking) return
+    checking = true
+    close()
+    try {
+      await checkLibrary()
+    } finally {
+      checking = false
+    }
+  }
+
   async function rebuild() {
     if (rebuilding) return
     rebuilding = true
@@ -179,6 +192,10 @@
         <button class="action" onclick={rebuild} disabled={rebuilding || !$library}>
           <Icon name="refresh" size={15} />
           {rebuilding ? 'Rebuilding…' : 'Empty Cache & Reload'}
+        </button>
+        <button class="action" onclick={check} disabled={checking || !$library}>
+          <Icon name="check" size={15} />
+          {checking ? 'Checking…' : 'Check Library…'}
         </button>
       {/if}
     </div>

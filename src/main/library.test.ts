@@ -557,3 +557,73 @@ describe('watched folders', () => {
     expect(await L.listWatched()).toEqual([])
   })
 })
+
+describe('library doctor', () => {
+  it('reports a healthy library as clean', async () => {
+    await png('a.png')
+    await L.createLibrary(root, 'Test')
+    await L.importPaths([src])
+    const r = await L.checkLibrary()
+    expect(r.items).toBe(1)
+    expect(L.fixableCount(r)).toBe(0)
+    expect(r.missingOriginals).toEqual([])
+  })
+
+  it('finds and repairs every fixable problem without losing files', async () => {
+    await png('apple.png')
+    await png('berry.png')
+    await text('cherry.txt', 'hi')
+    const lib = await L.createLibrary(root, 'Test')
+    const folder = await L.createFolder('Keep')
+    const [apple, berry, cherry] = (await L.importPaths([src])).sort((a, b) => a.name.localeCompare(b.name))
+    await L.updateItem(apple.id, { tags: ['fruit'], folderIds: [folder.id, 'gone-folder'] })
+
+    // Break things the way crashes, Finder and old versions do.
+    await fs.rm(join(lib.path, apple.thumbnail))
+    await fs.writeFile(join(lib.path, 'app', 'stray.png'), 'x')
+    await fs.writeFile(join(lib.path, 'app', 'broken.json'), '{ nope')
+    await fs.writeFile(join(lib.path, 'ber', `${berry.id}.json.tmp`), '{}')
+    await fs.writeFile(join(lib.path, 'library.json.tmp'), '{}')
+    await fs.writeFile(join(lib.path, 'tags.json'), '[]')
+    // A valid item stored under the wrong file name.
+    await fs.rename(join(lib.path, 'che', `${cherry.id}.json`), join(lib.path, 'che', 'copy.json'))
+    const meta = JSON.parse(await fs.readFile(join(lib.path, 'library.json'), 'utf-8'))
+    await fs.writeFile(join(lib.path, 'library.json'), JSON.stringify({ ...meta, itemCount: 99 }))
+
+    const r = await L.checkLibrary()
+    expect(r.repaired).toBe(false)
+    expect(r.missingThumbnails).toBe(1)
+    expect(r.orphans).toEqual(['app/stray.png'])
+    expect(r.corrupt).toEqual(['app/broken.json'])
+    expect(r.misplaced).toEqual(['che/copy.json'])
+    expect(r.tempFiles.sort()).toEqual([`ber/${berry.id}.json.tmp`, 'library.json.tmp'])
+    expect(r.danglingFolders).toBe(1)
+    expect(r.unlistedTags).toEqual(['fruit'])
+    expect(r.wrongCount).toBe(true)
+    // Checking alone changes nothing.
+    expect(await fs.readdir(join(lib.path, 'app'))).toContain('stray.png')
+
+    await L.checkLibrary({ repair: true })
+    const after = await L.checkLibrary()
+    expect(L.fixableCount(after)).toBe(0)
+
+    expect(await fs.stat(join(lib.path, apple.thumbnail))).toBeTruthy()
+    expect((await onDisk(lib.path, apple.id)).folderIds).toEqual([folder.id])
+    expect(await L.listTags()).toEqual(['fruit'])
+    expect((await onDisk(lib.path, cherry.id)).name).toBe('cherry')
+    expect((await L.listItems()).map((i) => i.name).sort()).toEqual(['apple', 'berry', 'cherry'])
+    // Stray and unreadable files are kept, not deleted.
+    const kept = (await walk(join(lib.path, 'lost-found'))).map((p) => p.slice(lib.path.length + 1))
+    expect(kept.sort()).toEqual(['lost-found/app/broken.json', 'lost-found/app/stray.png', 'lost-found/che/copy.json'])
+  })
+
+  it('reports missing originals but leaves those items alone', async () => {
+    const file = await png('far.png')
+    await L.createLibrary(root, 'Test')
+    const [item] = await L.importPaths([file], null, true)
+    await fs.rm(file)
+    const r = await L.checkLibrary({ repair: true })
+    expect(r.missingOriginals).toEqual([{ id: item.id, name: 'far.png', path: file, linked: true }])
+    expect((await L.listItems()).map((i) => i.id)).toEqual([item.id])
+  })
+})

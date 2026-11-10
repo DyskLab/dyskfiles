@@ -113,8 +113,29 @@ function originalAbs(libPath: string, item: Item): string {
   return item.linked ? item.original : join(libPath, item.original)
 }
 
+/**
+ * Write JSON atomically: write a temp file beside the target, then rename over it,
+ * so a crash mid-write never leaves a truncated metadata file behind. The temp name
+ * ends in `.tmp`, so the item scanner never mistakes it for an item.
+ */
 async function writeJson(path: string, data: unknown): Promise<void> {
-  await fs.writeFile(path, JSON.stringify(data, null, 2), 'utf-8')
+  const tmp = `${path}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8')
+  try {
+    await fs.rename(tmp, path)
+  } catch (err) {
+    await fs.rm(tmp, { force: true })
+    throw err
+  }
+}
+
+/** Run `fn` over `list` with at most `limit` calls in flight (keeps file handles bounded). */
+async function forEachLimit<T>(list: T[], limit: number, fn: (x: T) => Promise<void>): Promise<void> {
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < list.length) await fn(list[next++])
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, worker))
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -153,38 +174,84 @@ async function writeMeta(libPath: string, meta: LibraryMeta): Promise<void> {
 
 const RESERVED_ENTRIES = new Set(['library.json', 'tags.json', 'filters.json', 'folders.json'])
 
-/** Read every item metadata file in a library (unsorted), scanning bucket folders. */
-async function readItemsAt(libPath: string): Promise<Item[]> {
+/** Scan every item metadata file in a library from disk, keyed by id. */
+async function scanItems(libPath: string): Promise<Map<string, Item>> {
   await migrateLibrary(libPath)
+  const items = new Map<string, Item>()
   let entries: { name: string; isDirectory(): boolean }[] = []
   try {
     entries = await fs.readdir(libPath, { withFileTypes: true })
   } catch {
-    return []
+    return items
   }
-  const items: Item[] = []
-  for (const entry of entries) {
-    if (!entry.isDirectory() || RESERVED_ENTRIES.has(entry.name)) continue
+  const buckets = entries.filter((e) => e.isDirectory() && !RESERVED_ENTRIES.has(e.name))
+  await forEachLimit(buckets, 16, async (entry) => {
     let files: string[] = []
     try {
       files = await fs.readdir(join(libPath, entry.name))
     } catch {
-      continue
+      return
     }
     for (const file of files) {
       if (!file.endsWith('.json')) continue
       try {
-        items.push(
-          normalizeItem(
-            await readJson<Item & { folderId?: string | null }>(join(libPath, entry.name, file))
-          )
+        const item = normalizeItem(
+          await readJson<Item & { folderId?: string | null }>(join(libPath, entry.name, file))
         )
+        if (typeof item.id === 'string') items.set(item.id, item)
       } catch {
         // Skip corrupt entries.
       }
     }
-  }
+  })
   return items
+}
+
+// ---------- item cache ----------
+//
+// Item metadata is read from disk once per library and then kept in memory; every
+// write goes through `saveItem` / `dropItem`, which update the JSON file and the
+// cache together. Opening a library rescans it, so edits made outside the app are
+// picked up on the next open. Callers always get copies, so mutating a returned
+// item never changes the cache unless it is saved.
+
+const itemCache = new Map<string, Promise<Map<string, Item>>>()
+
+function loadItems(libPath: string): Promise<Map<string, Item>> {
+  let cached = itemCache.get(libPath)
+  if (!cached) {
+    cached = scanItems(libPath)
+    itemCache.set(libPath, cached)
+    cached.catch(() => itemCache.delete(libPath))
+  }
+  return cached
+}
+
+function invalidateItems(libPath: string): void {
+  itemCache.delete(libPath)
+}
+
+/** Every item in a library (unsorted), as copies. */
+async function readItemsAt(libPath: string): Promise<Item[]> {
+  return Array.from((await loadItems(libPath)).values(), (it) => structuredClone(it))
+}
+
+/** One item by id, as a copy, or null if it does not exist. */
+async function readItem(libPath: string, id: string): Promise<Item | null> {
+  const item = (await loadItems(libPath)).get(id)
+  return item ? structuredClone(item) : null
+}
+
+/** Persist an item's metadata to disk, then to the cache. */
+async function saveItem(libPath: string, item: Item): Promise<void> {
+  await writeJson(itemJsonPath(libPath, item.id), item)
+  ;(await loadItems(libPath)).set(item.id, structuredClone(item))
+}
+
+/** Remove an item's metadata file and its cache entry. */
+async function dropItem(libPath: string, id: string): Promise<void> {
+  await fs.rm(itemJsonPath(libPath, id), { force: true })
+  ;(await loadItems(libPath)).delete(id)
 }
 
 /** Back-compat: coerce a legacy single `folderId` into the `folderIds` array. */
@@ -297,6 +364,7 @@ export async function createLibrary(parentDir: string, name: string): Promise<Li
   }
   await writeMeta(libPath, meta)
 
+  invalidateItems(libPath)
   currentLibraryPath = libPath
   return { ...meta, path: libPath }
 }
@@ -311,6 +379,8 @@ export async function setIcon(libPath: string, icon: string): Promise<void> {
 export async function openLibrary(libPath: string): Promise<Library> {
   // Validate: must contain a readable library.json.
   const lib = await loadLibraryMeta(libPath)
+  // Rescan on every open so changes made outside the app are picked up.
+  invalidateItems(libPath)
   currentLibraryPath = libPath
   return lib
 }
@@ -451,7 +521,7 @@ export async function importPaths(
         deletedAt: null,
         linked
       }
-      await writeJson(itemJsonPath(libPath, id), item)
+      await saveItem(libPath, item)
       imported.push(item)
     } catch (err) {
       // Roll back partial files for this item (never the external source), then continue.
@@ -468,11 +538,11 @@ export async function importPaths(
 /** Move an item to the trash (soft delete — files are kept). */
 export async function trashItem(id: string): Promise<void> {
   const libPath = requireCurrent()
-  const itemPath = itemJsonPath(libPath, id)
   try {
-    const item = await readJson<Item>(itemPath)
+    const item = await readItem(libPath, id)
+    if (!item) return
     item.deletedAt = new Date().toISOString()
-    await writeJson(itemPath, item)
+    await saveItem(libPath, item)
   } catch {
     return
   }
@@ -482,11 +552,11 @@ export async function trashItem(id: string): Promise<void> {
 /** Restore an item from the trash. */
 export async function restoreItem(id: string): Promise<void> {
   const libPath = requireCurrent()
-  const itemPath = itemJsonPath(libPath, id)
   try {
-    const item = await readJson<Item>(itemPath)
+    const item = await readItem(libPath, id)
+    if (!item) return
     item.deletedAt = null
-    await writeJson(itemPath, item)
+    await saveItem(libPath, item)
   } catch {
     return
   }
@@ -496,15 +566,16 @@ export async function restoreItem(id: string): Promise<void> {
 /** Permanently delete a single item and its files. */
 export async function deleteItemForever(id: string): Promise<void> {
   const libPath = requireCurrent()
-  const itemPath = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(itemPath))
-    if (!item.linked) await fs.rm(join(libPath, item.original), { force: true }) // keep external files
-    if (item.thumbnail) await fs.rm(join(libPath, item.thumbnail), { force: true })
+    const item = await readItem(libPath, id)
+    if (item) {
+      if (!item.linked) await fs.rm(join(libPath, item.original), { force: true }) // keep external files
+      if (item.thumbnail) await fs.rm(join(libPath, item.thumbnail), { force: true })
+    }
   } catch {
-    // Metadata already gone.
+    // Files already gone.
   }
-  await fs.rm(itemPath, { force: true })
+  await dropItem(libPath, id)
   await updateItemCount(libPath)
 }
 
@@ -515,7 +586,7 @@ export async function emptyTrash(): Promise<number> {
   for (const item of trashed) {
     if (!item.linked) await fs.rm(join(libPath, item.original), { force: true }) // keep external files
     if (item.thumbnail) await fs.rm(join(libPath, item.thumbnail), { force: true })
-    await fs.rm(itemJsonPath(libPath, item.id), { force: true })
+    await dropItem(libPath, item.id)
   }
   if (trashed.length) await updateItemCount(libPath)
   return trashed.length
@@ -526,12 +597,11 @@ export async function reorderItems(orderedIds: string[]): Promise<void> {
   const libPath = requireCurrent()
   await Promise.all(
     orderedIds.map(async (id, index) => {
-      const itemPath = itemJsonPath(libPath, id)
       try {
-        const item = await readJson<Item>(itemPath)
-        if (item.order !== index) {
+        const item = await readItem(libPath, id)
+        if (item && item.order !== index) {
           item.order = index
-          await writeJson(itemPath, item)
+          await saveItem(libPath, item)
         }
       } catch {
         // Item vanished — ignore.
@@ -554,7 +624,7 @@ export async function rebuildThumbnails(): Promise<number> {
       if (width && height && (width !== item.width || height !== item.height)) {
         item.width = width
         item.height = height
-        await writeJson(itemJsonPath(libPath, item.id), item)
+        await saveItem(libPath, item)
       }
       rebuilt++
     } catch (err) {
@@ -572,9 +642,11 @@ export async function mergeInto(sourcePath: string, targetPath: string): Promise
   let maxOrder = targetItems.reduce((max, it) => Math.max(max, it.order ?? 0), 0)
   let merged = 0
 
+  const targetIds = new Set(targetItems.map((it) => it.id))
   for (const item of sourceItems) {
     let id = item.id
-    if (await exists(itemJsonPath(targetPath, id))) id = makeId(item.name)
+    if (targetIds.has(id) || (await exists(itemJsonPath(targetPath, id)))) id = makeId(item.name)
+    targetIds.add(id)
     const bucket = bucketFor(id)
     const originalRel = join(bucket, `${id}.${item.ext}`)
     const thumbnailRel = item.thumbnail ? join(bucket, `${id}.webp`) : ''
@@ -596,7 +668,7 @@ export async function mergeInto(sourcePath: string, targetPath: string): Promise
         folderIds: [], // folders don't carry across libraries
         lastUsedAt: null
       }
-      await writeJson(itemJsonPath(targetPath, id), copy)
+      await saveItem(targetPath, copy)
       merged++
     } catch (err) {
       console.error(`Failed to merge item ${item.id}:`, err)
@@ -614,6 +686,7 @@ export async function deleteLibraryFiles(libPath: string): Promise<void> {
     throw new Error('Refusing to delete: not a DyskFiles library')
   }
   await fs.rm(libPath, { recursive: true, force: true })
+  invalidateItems(libPath)
   if (currentLibraryPath === libPath) currentLibraryPath = null
 }
 
@@ -658,7 +731,7 @@ export async function deleteFolder(id: string): Promise<Folder[]> {
   for (const it of await readItemsAt(libPath)) {
     if (it.folderIds.includes(id)) {
       it.folderIds = it.folderIds.filter((f) => f !== id)
-      await writeJson(itemJsonPath(libPath, it.id), it)
+      await saveItem(libPath, it)
     }
   }
   return folders
@@ -672,9 +745,9 @@ type ItemPatch = Partial<
 
 export async function updateItem(id: string, patch: ItemPatch): Promise<Item | null> {
   const libPath = requireCurrent()
-  const p = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(p))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     if (patch.name !== undefined) item.name = patch.name
     if (patch.rating !== undefined) item.rating = patch.rating
     if (patch.duration !== undefined) item.duration = patch.duration
@@ -683,7 +756,7 @@ export async function updateItem(id: string, patch: ItemPatch): Promise<Item | n
     if (patch.url !== undefined) item.url = patch.url
     if (patch.tags !== undefined) item.tags = patch.tags
     if (patch.folderIds !== undefined) item.folderIds = patch.folderIds
-    await writeJson(p, item)
+    await saveItem(libPath, item)
     return item
   } catch {
     return null
@@ -702,16 +775,16 @@ export async function setItemThumbnail(
 ): Promise<Item | null> {
   const libPath = requireCurrent()
   const thumbRel = join(bucketFor(id), `${id}.webp`)
-  const p = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(p))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     const meta = await makeThumbnailFromBuffer(Buffer.from(bytes), join(libPath, thumbRel))
     item.thumbnail = thumbRel
     if (width) item.width = width
     if (height) item.height = height
     item.color = meta.color
     item.colors = meta.colors
-    await writeJson(p, item)
+    await saveItem(libPath, item)
     return item
   } catch {
     return null
@@ -727,9 +800,9 @@ export async function cropItem(
   region: { left: number; top: number; width: number; height: number }
 ): Promise<Item | null> {
   const libPath = requireCurrent()
-  const p = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(p))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     if (item.kind !== 'image') return null
     const srcAbs = originalAbs(libPath, item)
 
@@ -767,7 +840,7 @@ export async function cropItem(
     item.colors = tmeta.colors
     item.size = (await fs.stat(inLibAbs)).size
     item.dateModified = new Date().toISOString()
-    await writeJson(p, item)
+    await saveItem(libPath, item)
     return item
   } catch (err) {
     console.error(`Failed to crop item ${id}:`, err)
@@ -778,11 +851,11 @@ export async function cropItem(
 /** Record that an item was just opened (drives the "Recently Used" view). */
 export async function touchItem(id: string): Promise<Item | null> {
   const libPath = requireCurrent()
-  const p = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(p))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     item.lastUsedAt = new Date().toISOString()
-    await writeJson(p, item)
+    await saveItem(libPath, item)
     return item
   } catch {
     return null
@@ -856,7 +929,7 @@ export async function deleteTag(name: string): Promise<string[]> {
   for (const it of await readItemsAt(libPath)) {
     if ((it.tags ?? []).includes(name)) {
       it.tags = it.tags.filter((t) => t !== name)
-      await writeJson(itemJsonPath(libPath, it.id), it)
+      await saveItem(libPath, it)
     }
   }
   return list
@@ -872,7 +945,8 @@ export async function resolveAsset(kind: 'thumb' | 'original', id: string): Prom
   if (!/^[a-z0-9-]+$/.test(id)) return null
 
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(itemJsonPath(libPath, id)))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     if (kind === 'thumb') return item.thumbnail ? join(libPath, item.thumbnail) : null
     return item.original ? originalAbs(libPath, item) : null
   } catch {
@@ -885,7 +959,8 @@ export async function resolveAsset(kind: 'thumb' | 'original', id: string): Prom
 export async function readText(id: string): Promise<string | null> {
   const libPath = requireCurrent()
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(itemJsonPath(libPath, id)))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     return await fs.readFile(originalAbs(libPath, item), 'utf-8')
   } catch {
     return null
@@ -894,15 +969,15 @@ export async function readText(id: string): Promise<string | null> {
 
 export async function writeText(id: string, content: string): Promise<Item | null> {
   const libPath = requireCurrent()
-  const p = itemJsonPath(libPath, id)
   try {
-    const item = normalizeItem(await readJson<Item & { folderId?: string | null }>(p))
+    const item = await readItem(libPath, id)
+    if (!item) return null
     const abs = originalAbs(libPath, item)
     await fs.writeFile(abs, content, 'utf-8')
     const st = await fs.stat(abs)
     item.size = st.size
     item.dateModified = new Date().toISOString()
-    await writeJson(p, item)
+    await saveItem(libPath, item)
     return item
   } catch {
     return null

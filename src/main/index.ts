@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell } from 'electron'
-import { promises as fs } from 'fs'
+import { createReadStream, promises as fs } from 'fs'
+import { Readable } from 'stream'
 import { APP_ICON_DATA_URL } from './appIcon'
 import { createHash } from 'crypto'
 import os from 'os'
@@ -192,6 +193,35 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+/**
+ * Parse a single `Range: bytes=…` header against a file of `size` bytes.
+ * Supports `start-end`, `start-` and the suffix form `-n` (last n bytes).
+ * Returns null when the range cannot be satisfied (→ 416).
+ */
+function parseRange(header: string, size: number): { start: number; end: number } | null {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(header.split(',')[0].trim())
+  if (!m || (!m[1] && !m[2]) || size === 0) return null
+  let start: number
+  let end: number
+  if (!m[1]) {
+    // Suffix range: the last n bytes.
+    const n = parseInt(m[2], 10)
+    if (n === 0) return null
+    start = Math.max(0, size - n)
+    end = size - 1
+  } else {
+    start = parseInt(m[1], 10)
+    end = m[2] ? Math.min(parseInt(m[2], 10), size - 1) : size - 1
+  }
+  if (start >= size || start > end) return null
+  return { start, end }
+}
+
+/** Stream bytes [start, end] of a file, so large media never sits whole in memory. */
+function streamFile(filePath: string, start: number, end: number): ReadableStream {
+  return Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream
+}
+
 function registerAssetProtocol(): void {
   protocol.handle('asset', async (request) => {
     const url = new URL(request.url) // asset://<kind>/<id>
@@ -208,32 +238,25 @@ function registerAssetProtocol(): void {
 
       // Range requests (video/audio seeking) → 206 Partial Content.
       if (range) {
-        const m = /bytes=(\d*)-(\d*)/.exec(range)
-        let start = m && m[1] ? parseInt(m[1], 10) : 0
-        let end = m && m[2] ? parseInt(m[2], 10) : stat.size - 1
-        if (isNaN(start) || start < 0) start = 0
-        if (isNaN(end) || end >= stat.size) end = stat.size - 1
-        const len = end - start + 1
-        const fh = await fs.open(filePath)
-        try {
-          const buf = Buffer.alloc(len)
-          await fh.read(buf, 0, len, start)
-          return new Response(buf, {
-            status: 206,
-            headers: {
-              'Content-Type': mime,
-              'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-              'Accept-Ranges': 'bytes',
-              'Content-Length': String(len)
-            }
+        const r = parseRange(range, stat.size)
+        if (!r) {
+          return new Response(null, {
+            status: 416,
+            headers: { 'Content-Range': `bytes */${stat.size}` }
           })
-        } finally {
-          await fh.close()
         }
+        return new Response(streamFile(filePath, r.start, r.end), {
+          status: 206,
+          headers: {
+            'Content-Type': mime,
+            'Content-Range': `bytes ${r.start}-${r.end}/${stat.size}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': String(r.end - r.start + 1)
+          }
+        })
       }
 
-      const data = await fs.readFile(filePath)
-      return new Response(data, {
+      return new Response(stat.size ? streamFile(filePath, 0, stat.size - 1) : null, {
         headers: {
           'Content-Type': mime,
           'Accept-Ranges': 'bytes',

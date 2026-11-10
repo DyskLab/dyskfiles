@@ -20,7 +20,8 @@
     loadPrefs,
     markItemUsed,
     undo,
-    undoNotice
+    undoNotice,
+    updateInfo
   } from './lib/store'
   import Welcome from './components/Welcome.svelte'
   import Sidebar from './components/Sidebar.svelte'
@@ -38,6 +39,7 @@
   import PdfViewer from './components/PdfViewer.svelte'
   import FontViewer from './components/FontViewer.svelte'
   import WatchedFolders from './components/WatchedFolders.svelte'
+  import UpdateBanner from './components/UpdateBanner.svelte'
 
   const openItem = $derived(
     $openId ? ([...$items, ...$trash].find((i) => i.id === $openId) ?? null) : null
@@ -155,6 +157,10 @@
   {:else if openItem}
     <Lightbox item={openItem} />
   {/if}
+{/if}
+
+{#if $updateInfo}
+  {#key $updateInfo.version}<UpdateBanner info={$updateInfo} />{/key}
 {/if}
 
 <style>

@@ -33,6 +33,10 @@ xattr -dr com.apple.quarantine /Applications/DyskFiles.app
 
 On Intel Macs, [run it from source](#run-from-source).
 
+**Updates:** DyskFiles checks GitHub for a new release once a day (or from **DyskFiles > Check for Updates…**). When
+one is out, it downloads and opens the new DMG; quit the app and drag the new version onto Applications. Turn the daily
+check off in the Check for Updates dialog.
+
 ## Features
 
 **Libraries**
@@ -122,11 +126,19 @@ npm run dev
 | `npm test` | Runs the library tests with Vitest |
 | `npm run dist` | Builds the Apple Silicon DMG into `dist/` |
 
+## Releasing
+
+1. Bump `version` in `package.json` and run `npm run dist`.
+2. Create a GitHub release tagged `v<version>` (not a draft or pre-release) and attach `dist/DyskFiles-<version>-arm64.dmg`.
+
+The app compares the tag with its own version and picks the DMG whose name contains its architecture (`arm64`, or
+`x64` for an Intel build), so keep that naming.
+
 ## Project structure
 
 - **`src/main/`** owns all file access: libraries and storage (`library.ts`), thumbnails (`thumbnail.ts`), saved
-  settings (`config.ts`), file watching for edited items and Auto Import (`watcher.ts`), and the window, IPC
-  handlers, and `asset://` protocol (`index.ts`).
+  settings (`config.ts`), file watching for edited items and Auto Import (`watcher.ts`), update checks
+  (`updater.ts`), and the window, IPC handlers, and `asset://` protocol (`index.ts`).
 - **`src/preload/`** exposes a small typed `window.rak` API through `contextBridge` (types in `api.d.ts`).
 - **`src/renderer/`** is the Svelte 5 and TypeScript interface.
 

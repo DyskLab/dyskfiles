@@ -61,6 +61,7 @@ import {
   type Library
 } from './library'
 import { refreshFolderWatchers, stopWatchers, syncWatchers, watchItem } from './watcher'
+import { autoCheck, downloadUpdate, getLatest, manualCheck, skipVersion } from './updater'
 
 // The custom scheme must be registered before the app is ready.
 protocol.registerSchemesAsPrivileged([
@@ -493,6 +494,17 @@ function registerIpc(): void {
     return err || null
   })
 
+  // ----- updates (GitHub Releases) -----
+  ipcMain.handle('update:latest', () => getLatest())
+  ipcMain.handle('update:check', (e) => manualCheck(BrowserWindow.fromWebContents(e.sender)))
+  ipcMain.handle('update:skip', (_e, version: string) => skipVersion(version))
+  ipcMain.handle('update:download', (e) =>
+    downloadUpdate((received, total) => {
+      if (!e.sender.isDestroyed()) e.sender.send('update:progress', { received, total })
+    })
+  )
+  ipcMain.handle('update:quit', () => app.quit())
+
   // Check the library for problems; offer to repair the ones that can be fixed.
   // Returns true when anything was repaired (the window then reloads its items).
   ipcMain.handle('library:check', async (e) => {
@@ -831,12 +843,49 @@ function registerIpc(): void {
   })
 }
 
+/** The standard macOS menus, plus "Check for Updates…" under the app name. */
+function buildAppMenu(): void {
+  const check = (): void => {
+    void manualCheck(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null)
+  }
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { label: 'Check for Updates…', click: check },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    ...(process.platform === 'darwin' ? [] : [{ label: 'Help', submenu: [{ label: 'Check for Updates…', click: check }] }])
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+}
+
 app.whenReady().then(async () => {
   const icon = buildAppIcon()
   if (icon && process.platform === 'darwin') app.dock?.setIcon(icon)
   registerAssetProtocol()
   registerIpc()
-  createWindow()
+  buildAppMenu()
+  const win = createWindow()
+  // Look for a newer release a little after launch, once the window can show it.
+  win.webContents.once('did-finish-load', () => setTimeout(() => void autoCheck(), 4000))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

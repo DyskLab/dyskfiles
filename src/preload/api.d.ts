@@ -55,6 +55,14 @@ interface RakItem {
   dhash?: string
 }
 
+interface RakUpdateInfo {
+  version: string
+  current: string
+  notes: string
+  page: string
+  asset: { name: string; url: string; size: number; digest?: string }
+}
+
 interface RakEagleResult {
   imported: number
   unsupported: number
@@ -103,6 +111,16 @@ interface RakApi {
   rebuildThumbnails(): Promise<RakItem[]>
   /** Check the library and offer to repair it; true when something was repaired. */
   checkLibrary(): Promise<boolean>
+  /** The update found this session, if any. */
+  latestUpdate(): Promise<RakUpdateInfo | null>
+  /** "Check for Updates…": the main process reports the result itself. */
+  checkForUpdates(): Promise<void>
+  skipUpdate(version: string): Promise<void>
+  /** Download and open the update's DMG; resolves to its path. */
+  downloadUpdate(): Promise<string>
+  quitForUpdate(): Promise<void>
+  onUpdateAvailable(cb: (info: RakUpdateInfo) => void): () => void
+  onUpdateProgress(cb: (p: { received: number; total: number }) => void): () => void
   /** Show the native per-library context menu; resolves with the chosen action. */
   libraryContextMenu(path: string): Promise<RakContextResult | null>
   /** Active (non-trashed) items in the current library. */

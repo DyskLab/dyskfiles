@@ -26,6 +26,12 @@ export const eagleProgress = writable<{ done: number; total: number } | null>(nu
 /** Folders whose new files are imported automatically. */
 export const watchedFolders = writable<string[]>([])
 export const watchedOpen = writable<boolean>(false)
+/** A newer release found on GitHub (shown as a notice until dismissed). */
+export const updateInfo = writable<RakUpdateInfo | null>(null)
+window.rak.onUpdateAvailable((info) => updateInfo.set(info))
+void window.rak.latestUpdate().then((info) => {
+  if (info) updateInfo.set(info)
+})
 /** Inline quick-search query + which fields it searches. */
 export const query = writable<string>('')
 export const filterBarOpen = writable<boolean>(true)

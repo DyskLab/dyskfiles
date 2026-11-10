@@ -35,6 +35,7 @@ const api: RakApi = {
   writeText: (id, content) => ipcRenderer.invoke('items:writeText', id, content),
   revealItem: (id) => ipcRenderer.invoke('items:reveal', id),
   exportItem: (id, filename) => ipcRenderer.invoke('items:export', id, filename),
+  exportItems: (ids, title) => ipcRenderer.invoke('items:exportMany', ids, title),
   listFolders: () => ipcRenderer.invoke('folders:list'),
   createFolder: (name) => ipcRenderer.invoke('folders:create', name),
   renameFolder: (id, name) => ipcRenderer.invoke('folders:rename', id, name),

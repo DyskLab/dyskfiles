@@ -153,6 +153,8 @@ interface RakApi {
   revealItem(id: string): Promise<void>
   /** Export (copy) an item's original file to a chosen location. */
   exportItem(id: string, filename: string): Promise<boolean>
+  /** Export items into a new folder (chosen by the user) with metadata.json and metadata.csv. */
+  exportItems(ids: string[], title: string): Promise<boolean>
   /** Folders in the current library. */
   listFolders(): Promise<RakFolder[]>
   createFolder(name: string): Promise<RakFolder>

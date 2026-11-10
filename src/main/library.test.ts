@@ -627,3 +627,44 @@ describe('library doctor', () => {
     expect((await L.listItems()).map((i) => i.id)).toEqual([item.id])
   })
 })
+
+describe('export', () => {
+  it('copies originals with metadata.json and metadata.csv, renaming clashes', async () => {
+    await fs.mkdir(join(src, 'sub'))
+    await png('logo.png')
+    await sharp({ create: { width: 10, height: 10, channels: 3, background: '#00f' } }).png().toFile(join(src, 'sub', 'logo.png'))
+    await text('notes.txt', 'hello')
+    await L.createLibrary(root, 'Test')
+    const folder = await L.createFolder('Brand')
+    const items = await L.importPaths([src])
+    const txt = items.find((i) => i.ext === 'txt')!
+    await L.updateItem(txt.id, { tags: ['a', 'b'], folderIds: [folder.id], note: 'say "hi", ok', rating: 3 })
+
+    const out = join(root, 'out')
+    await fs.mkdir(out)
+    const r = await L.exportItems(items.map((i) => i.id), out, 'My: View')
+    expect(r).toEqual({ dir: join(out, 'My- View'), exported: 3, missing: [] })
+    expect((await fs.readdir(r.dir)).sort()).toEqual(['logo (2).png', 'logo.png', 'metadata.csv', 'metadata.json', 'notes.txt'])
+    expect(await fs.readFile(join(r.dir, 'notes.txt'), 'utf-8')).toBe('hello')
+
+    const meta = JSON.parse(await fs.readFile(join(r.dir, 'metadata.json'), 'utf-8'))
+    const row = meta.find((m: { file: string }) => m.file === 'notes.txt')
+    expect(row).toMatchObject({ tags: ['a', 'b'], folders: ['Brand'], rating: 3, note: 'say "hi", ok' })
+    const csv = await fs.readFile(join(r.dir, 'metadata.csv'), 'utf-8')
+    expect(csv).toContain('notes.txt,notes,text,0,0,5,3,a; b,Brand,"say ""hi"", ok",,')
+
+    // A second export does not overwrite the first.
+    const again = await L.exportItems([txt.id], out, 'My: View')
+    expect(again.dir).toBe(join(out, 'My- View 2'))
+  })
+
+  it('skips items whose original is gone', async () => {
+    const file = await png('far.png')
+    await L.createLibrary(root, 'Test')
+    const [item] = await L.importPaths([file], null, true)
+    await fs.rm(file)
+    const r = await L.exportItems([item.id], root, 'Out')
+    expect(r.exported).toBe(0)
+    expect(r.missing).toEqual(['far.png'])
+  })
+})

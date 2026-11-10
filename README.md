@@ -71,6 +71,8 @@ On Intel Macs, [run it from source](#run-from-source).
 - Waterfall, justified, grid, and list layouts, with zoom and sorting.
 - An inspector with rating, tags, folders, notes, URL, color palette, and metadata.
 - A preview with rotate, flip, fit or actual size, crop, and next and previous.
+- **Export** the items in the current view (a folder, filter, or search) to a new folder, with `metadata.json` and a
+  `metadata.csv` you can open in a spreadsheet.
 
 | Inspector | Preview | Add menu |
 | --- | --- | --- |

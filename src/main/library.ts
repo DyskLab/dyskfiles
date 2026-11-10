@@ -1113,6 +1113,92 @@ export async function refreshItemFromDisk(id: string, since: FileStamp): Promise
   return item
 }
 
+// ---------- export ----------
+
+export interface ExportResult {
+  dir: string
+  exported: number
+  /** Items skipped because their original file is gone. */
+  missing: string[]
+}
+
+/** A file or folder name that is safe on macOS, Windows and Linux. */
+function safeName(s: string): string {
+  return s.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-').replace(/^\.+/, '').trim().slice(0, 120) || 'untitled'
+}
+
+function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? '' : String(v)
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+/**
+ * Copy items' originals into a new folder inside `parentDir`, together with
+ * metadata.json (everything DyskFiles knows) and metadata.csv (for
+ * spreadsheets). File names are the item names; clashes get " (2)", " (3)".
+ */
+export async function exportItems(ids: string[], parentDir: string, title: string): Promise<ExportResult> {
+  const libPath = requireCurrent()
+  const byId = new Map((await readItemsAt(libPath)).map((it) => [it.id, it]))
+  const folderName = new Map((await listFolders()).map((f) => [f.id, f.name]))
+
+  const base = join(parentDir, safeName(title))
+  let dir = base
+  for (let n = 2; await exists(dir); n++) dir = `${base} ${n}`
+  await fs.mkdir(dir, { recursive: true })
+
+  const used = new Set<string>()
+  const rows: Record<string, unknown>[] = []
+  const missing: string[] = []
+  for (const id of ids) {
+    const it = byId.get(id)
+    if (!it) continue
+    const src = originalAbs(libPath, it)
+    const stem = safeName(it.name)
+    const ext = it.ext ? `.${it.ext}` : ''
+    let file = `${stem}${ext}`
+    for (let n = 2; used.has(file.toLowerCase()); n++) file = `${stem} (${n})${ext}`
+    try {
+      await fs.copyFile(src, join(dir, file))
+    } catch {
+      missing.push(`${it.name}${ext}`)
+      continue
+    }
+    used.add(file.toLowerCase())
+    rows.push({
+      file,
+      name: it.name,
+      ext: it.ext,
+      kind: it.kind,
+      size: it.size,
+      width: it.width,
+      height: it.height,
+      duration: it.duration,
+      rating: it.rating,
+      tags: it.tags ?? [],
+      folders: (it.folderIds ?? []).map((f) => folderName.get(f)).filter(Boolean),
+      note: it.note,
+      comment: it.comment,
+      url: it.url,
+      color: it.color,
+      colors: it.colors,
+      importedAt: it.importedAt,
+      dateCreated: it.dateCreated,
+      dateModified: it.dateModified
+    })
+  }
+
+  await fs.writeFile(join(dir, 'metadata.json'), JSON.stringify(rows, null, 2))
+  const cols = ['file', 'name', 'kind', 'width', 'height', 'size', 'rating', 'tags', 'folders', 'note', 'comment', 'url']
+  const csv = [cols.join(',')]
+  for (const r of rows) {
+    csv.push(cols.map((c) => csvCell(Array.isArray(r[c]) ? (r[c] as string[]).join('; ') : r[c])).join(','))
+  }
+  // A BOM so Excel reads the file as UTF-8.
+  await fs.writeFile(join(dir, 'metadata.csv'), '\ufeff' + csv.join('\r\n') + '\r\n')
+  return { dir, exported: rows.length, missing }
+}
+
 // ---------- library doctor ----------
 
 export interface DoctorReport {

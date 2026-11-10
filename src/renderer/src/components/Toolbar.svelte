@@ -45,6 +45,18 @@
   const count = $derived(isTags ? $allTags.length : $displayed.length)
   const unit = $derived(isTags ? (count === 1 ? 'tag' : 'tags') : count === 1 ? 'item' : 'items')
 
+  let exporting = $state(false)
+  async function exportView() {
+    if (exporting || !count) return
+    exporting = true
+    try {
+      const q = $query.trim()
+      await window.rak.exportItems($displayed.map((it) => it.id), q ? `${title} - ${q}` : title)
+    } finally {
+      exporting = false
+    }
+  }
+
   async function doEmptyTrash() {
     if (emptying) return
     emptying = true
@@ -108,6 +120,18 @@
       <Icon name="filter" size={16} />
       {#if $activeFilterCount}<span class="fbadge">{$activeFilterCount}</span>{/if}
     </button>
+
+    {#if !isTags && $view !== 'trash'}
+      <button
+        class="ficon"
+        use:tooltip={`Export ${count} ${unit}…`}
+        aria-label="Export {count} {unit}"
+        onclick={exportView}
+        disabled={exporting || !count}
+      >
+        <Icon name="share" size={16} />
+      </button>
+    {/if}
 
     <ViewOptions />
 
@@ -219,6 +243,10 @@
     border: none;
     border-radius: 7px;
     color: var(--text-dim);
+  }
+  .ficon:disabled {
+    opacity: 0.4;
+    pointer-events: none;
   }
   .ficon:hover,
   .ficon.on {

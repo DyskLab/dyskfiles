@@ -30,6 +30,7 @@
     image: `<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>`,
     x: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
     check: `<path d="M20 6 9 17l-5-5"/>`,
+    share: `<path d="M12 2v13"/><path d="m16 6-4-4-4 4"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>`,
     search: `<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>`,
     sidebar: `<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>`,
     sliders: `<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>`,

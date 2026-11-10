@@ -56,6 +56,7 @@ import {
   removeWatched,
   checkLibrary,
   fixableCount,
+  exportItems,
   type DoctorReport,
   type Library
 } from './library'
@@ -680,6 +681,33 @@ function registerIpc(): void {
     const res = await dialog.showSaveDialog({ title: 'Export', defaultPath: filename || basename(abs) })
     if (res.canceled || !res.filePath) return false
     await fs.copyFile(abs, res.filePath)
+    return true
+  })
+
+  // Export several items (the current view) into a new folder with their metadata.
+  ipcMain.handle('items:exportMany', async (e, ids: string[], title: string) => {
+    if (!getCurrentPath() || !ids.length) return false
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const pick = await dialog.showOpenDialog({
+      title: `Export ${ids.length === 1 ? '1 item' : `${ids.length} items`}`,
+      buttonLabel: 'Export Here',
+      message: 'A new folder is created here with the files, metadata.json and metadata.csv.',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (pick.canceled || !pick.filePaths[0]) return false
+    const result = await exportItems(ids, pick.filePaths[0], title)
+    if (result.missing.length) {
+      const names = result.missing.slice(0, 8).map((n) => `  • ${n}`)
+      if (result.missing.length > 8) names.push(`  … and ${result.missing.length - 8} more`)
+      const opts = {
+        type: 'warning' as const,
+        message: `Exported ${result.exported} of ${result.exported + result.missing.length} items`,
+        detail: `These were skipped because their original file is gone:\n${names.join('\n')}`
+      }
+      if (win) await dialog.showMessageBox(win, opts)
+      else await dialog.showMessageBox(opts)
+    }
+    shell.showItemInFolder(join(result.dir, 'metadata.json'))
     return true
   })
 

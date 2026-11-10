@@ -46,7 +46,23 @@ const api: RakApi = {
   deleteTag: (name) => ipcRenderer.invoke('tags:delete', name),
   getPrefs: () => ipcRenderer.invoke('prefs:get'),
   setPrefs: (patch) => ipcRenderer.invoke('prefs:set', patch),
-  getPathForFile: (file) => webUtils.getPathForFile(file)
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  openItemExternally: (id) => ipcRenderer.invoke('items:openExternal', id),
+  findSimilar: (maxDistance) => ipcRenderer.invoke('items:findSimilar', maxDistance),
+  importEagle: () => ipcRenderer.invoke('eagle:import'),
+  listWatched: () => ipcRenderer.invoke('watch:list'),
+  addWatched: () => ipcRenderer.invoke('watch:add'),
+  removeWatched: (dir) => ipcRenderer.invoke('watch:remove', dir),
+  onEagleProgress: (cb) => subscribe('eagle:progress', cb),
+  onItemsChanged: (cb) => subscribe('items:changed', cb),
+  onItemsAdded: (cb) => subscribe('items:added', cb)
+}
+
+/** Listen on a main → renderer channel; returns a function that stops listening. */
+function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
+  const listener = (_e: Electron.IpcRendererEvent, payload: T): void => cb(payload)
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.removeListener(channel, listener)
 }
 
 contextBridge.exposeInMainWorld('rak', api)

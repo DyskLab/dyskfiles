@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { duplicatesOpen, duplicateGroups, cacheBust, trashItem, findDuplicates } from '../lib/store'
+  import {
+    duplicatesOpen,
+    duplicateGroups,
+    duplicateMode,
+    duplicatesBusy,
+    cacheBust,
+    trashItem,
+    findDuplicates
+  } from '../lib/store'
   import Icon from './Icon.svelte'
+  import { kindIcon } from '../lib/kind'
 
   let busy = $state(false)
 
@@ -11,8 +20,12 @@
   function close() {
     duplicatesOpen.set(false)
   }
-  function icon(kind: string): string {
-    return kind === 'video' ? 'film' : kind === 'audio' ? 'music' : kind === 'text' ? 'note' : 'image'
+  const icon = kindIcon
+  function plural(n: number, word: string): string {
+    return `${n} ${word}${n === 1 ? '' : 's'}`
+  }
+  function setMode(mode: 'identical' | 'similar') {
+    if (mode !== $duplicateMode && !$duplicatesBusy) findDuplicates(mode)
   }
   async function trashRest(group: RakItem[]) {
     if (busy) return
@@ -56,17 +69,29 @@
         <Icon name="shapes" size={16} />
         <span>Duplicated Items</span>
       </div>
+      <div class="modes" role="tablist">
+        <button class:on={$duplicateMode === 'identical'} onclick={() => setMode('identical')} role="tab" aria-selected={$duplicateMode === 'identical'}>Identical</button>
+        <button class:on={$duplicateMode === 'similar'} onclick={() => setMode('similar')} role="tab" aria-selected={$duplicateMode === 'similar'}>Similar</button>
+      </div>
       <button class="close" onclick={close}><Icon name="x" size={16} /></button>
     </div>
 
-    {#if $duplicateGroups.length === 0}
+    {#if $duplicatesBusy}
+      <div class="empty">
+        <Icon name="refresh" size={36} strokeWidth={1.5} />
+        <p>{$duplicateMode === 'similar' ? 'Comparing pictures…' : 'Comparing files…'}</p>
+      </div>
+    {:else if $duplicateGroups.length === 0}
       <div class="empty">
         <Icon name="check" size={40} strokeWidth={1.5} />
-        <p>No duplicates found</p>
+        <p>{$duplicateMode === 'similar' ? 'No similar images found' : 'No duplicates found'}</p>
       </div>
     {:else}
       <div class="summary">
-        <span>{$duplicateGroups.length} groups · {total} items · {extra} duplicates</span>
+        <span>
+          {plural($duplicateGroups.length, 'group')} · {plural(total, 'item')} · {plural(extra, $duplicateMode === 'similar' ? 'look-alike' : 'duplicate')}
+          {#if $duplicateMode === 'similar'}<span class="hint"> · the largest copy is kept</span>{/if}
+        </span>
         <button class="dangerlink" onclick={trashAllExtras} disabled={busy}>Trash all extras</button>
       </div>
       <div class="groups">
@@ -75,7 +100,7 @@
             <div class="thumbs">
               {#each group as it, i (it.id)}
                 <div class="thumb" class:keep={i === 0} title={`${it.name}.${it.ext}`}>
-                  {#if it.kind === 'image'}
+                  {#if it.thumbnail}
                     <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
                   {:else}
                     <span class="ic"><Icon name={icon(it.kind)} size={22} /></span>
@@ -95,6 +120,32 @@
 </div>
 
 <style>
+  .modes {
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    margin-right: 10px;
+    padding: 2px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .modes button {
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .modes button.on {
+    background: var(--bg-elev-2);
+    color: var(--text);
+  }
+  .hint {
+    color: var(--text-faint);
+  }
   .backdrop {
     position: fixed;
     inset: 0;

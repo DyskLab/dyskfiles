@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { addItems, addFolder, addSmartFolder, findDuplicates } from '../lib/store'
+  import {
+    addItems,
+    addFolder,
+    addSmartFolder,
+    findDuplicates,
+    importEagleLibrary,
+    watchedOpen
+  } from '../lib/store'
   import Icon from './Icon.svelte'
 
   let open = $state(false)
@@ -145,11 +152,11 @@
           <Icon name="link" size={15} /> Import from Links…
         </button>
       {/if}
-      <button class="mi" disabled>
-        <Icon name="box" size={15} /> Import Eagle Package… <span class="soon">Soon</span>
+      <button class="mi" onclick={() => { close(); importEagleLibrary() }} title="Copy items, tags and folders in from an Eagle .library folder">
+        <Icon name="box" size={15} /> Import Eagle Library…
       </button>
-      <button class="mi" disabled>
-        <Icon name="refresh" size={15} /> Auto Import <span class="soon">Soon</span>
+      <button class="mi" onclick={() => { close(); watchedOpen.set(true) }} title="Import new files from watched folders automatically">
+        <Icon name="refresh" size={15} /> Auto Import…
       </button>
       <button class="mi" onclick={() => { close(); findDuplicates() }}>
         <Icon name="shapes" size={15} /> Find Duplicated Items

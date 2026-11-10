@@ -23,7 +23,7 @@ interface RakContextResult {
   count?: number
 }
 
-type RakItemKind = 'image' | 'text' | 'video' | 'audio'
+type RakItemKind = 'image' | 'text' | 'video' | 'audio' | 'pdf' | 'font'
 
 interface RakItem {
   id: string
@@ -51,6 +51,16 @@ interface RakItem {
   lastUsedAt: string | null
   deletedAt: string | null
   linked: boolean
+  eagleId?: string
+  dhash?: string
+}
+
+interface RakEagleResult {
+  imported: number
+  unsupported: number
+  missing: number
+  already: number
+  folders: number
 }
 
 interface RakFolder {
@@ -159,6 +169,23 @@ interface RakApi {
   setPrefs(patch: Record<string, unknown>): Promise<void>
   /** Resolve a dropped File to its absolute path on disk. */
   getPathForFile(file: File): string
+  /** Open an item in its default app and watch it for saves; resolves with an error message or null. */
+  openItemExternally(id: string): Promise<string | null>
+  /** Groups of visually similar images/videos (thumbnail hashes within `maxDistance` of 64 bits). */
+  findSimilar(maxDistance?: number): Promise<RakItem[][]>
+  /** Pick an Eagle library, confirm, and import it. Null when cancelled. */
+  importEagle(): Promise<RakEagleResult | null>
+  /** Watched folders whose new files are imported automatically. */
+  listWatched(): Promise<string[]>
+  /** Pick a folder to watch; resolves with the updated list. */
+  addWatched(): Promise<string[]>
+  removeWatched(dir: string): Promise<string[]>
+  /** Progress of a running Eagle import. Returns an unsubscribe function. */
+  onEagleProgress(cb: (p: { done: number; total: number }) => void): () => void
+  /** An item changed on disk (saved from another app). Returns an unsubscribe function. */
+  onItemsChanged(cb: (item: RakItem) => void): () => void
+  /** Items were imported in the background (watched folders). Returns an unsubscribe function. */
+  onItemsAdded(cb: (items: RakItem[]) => void): () => void
 }
 
 interface Window {

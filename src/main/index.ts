@@ -2,7 +2,6 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, shell
 import { createReadStream, promises as fs } from 'fs'
 import { Readable } from 'stream'
 import { APP_ICON_DATA_URL } from './appIcon'
-import { createHash } from 'crypto'
 import os from 'os'
 import { basename, extname, join } from 'path'
 import { readConfig, rememberLibrary, forgetLibrary, readPrefs, writePrefs } from './config'
@@ -44,10 +43,20 @@ import {
   IMAGE_EXTS,
   VIDEO_EXTS,
   AUDIO_EXTS,
+  PDF_EXTS,
+  FONT_EXTS,
   TEXT_EXTS,
   SUPPORTED_EXTS,
+  findDuplicates,
+  findSimilar,
+  surveyEagle,
+  importEagle,
+  listWatched,
+  addWatched,
+  removeWatched,
   type Library
 } from './library'
+import { refreshFolderWatchers, stopWatchers, syncWatchers, watchItem } from './watcher'
 
 // The custom scheme must be registered before the app is ready.
 protocol.registerSchemesAsPrivileged([
@@ -80,7 +89,12 @@ const MIME: Record<string, string> = {
   '.aac': 'audio/aac',
   '.ogg': 'audio/ogg',
   '.m4a': 'audio/mp4',
-  '.opus': 'audio/opus'
+  '.opus': 'audio/opus',
+  '.pdf': 'application/pdf',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2'
 }
 
 const MIME_TO_EXT: Record<string, string> = {
@@ -95,6 +109,11 @@ const MIME_TO_EXT: Record<string, string> = {
   'audio/mpeg': '.mp3',
   'audio/wav': '.wav',
   'audio/ogg': '.ogg',
+  'application/pdf': '.pdf',
+  'font/ttf': '.ttf',
+  'font/otf': '.otf',
+  'font/woff': '.woff',
+  'font/woff2': '.woff2',
   'text/plain': '.txt',
   'text/markdown': '.md',
   'application/json': '.json',
@@ -135,7 +154,9 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      // The preload only needs `electron` (contextBridge, ipcRenderer, webUtils),
+      // all of which a sandboxed preload can use.
+      sandbox: true
     }
   })
 
@@ -309,6 +330,7 @@ function registerIpc(): void {
     const lib = await tryOpen(lastLibraryPath)
     // Seed the known-list from a pre-existing config (migration) and keep it fresh.
     if (lib) await rememberLibrary({ path: lib.path, name: lib.name, icon: lib.icon })
+    await syncWatchers()
     return lib
   })
 
@@ -322,6 +344,7 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null
     const lib = await createLibrary(result.filePaths[0], name)
     await rememberLibrary({ path: lib.path, name: lib.name, icon: lib.icon })
+    await syncWatchers()
     return lib
   })
 
@@ -334,6 +357,7 @@ function registerIpc(): void {
     try {
       const lib = await openLibrary(result.filePaths[0])
       await rememberLibrary({ path: lib.path, name: lib.name, icon: lib.icon })
+      await syncWatchers()
       return lib
     } catch {
       await dialog.showErrorBox('Not a DyskFiles library', 'The chosen folder has no library.json.')
@@ -345,6 +369,7 @@ function registerIpc(): void {
     try {
       const lib = await openLibrary(path)
       await rememberLibrary({ path: lib.path, name: lib.name, icon: lib.icon })
+      await syncWatchers()
       return lib
     } catch {
       await dialog.showErrorBox('Library not found', 'This library could not be opened. It may have been moved or deleted.')
@@ -364,6 +389,8 @@ function registerIpc(): void {
         { name: 'Images', extensions: IMAGE_EXTS.map((e) => e.slice(1)) },
         { name: 'Video', extensions: VIDEO_EXTS.map((e) => e.slice(1)) },
         { name: 'Audio', extensions: AUDIO_EXTS.map((e) => e.slice(1)) },
+        { name: 'PDF', extensions: PDF_EXTS.map((e) => e.slice(1)) },
+        { name: 'Fonts', extensions: FONT_EXTS.map((e) => e.slice(1)) },
         { name: 'Text', extensions: TEXT_EXTS.map((e) => e.slice(1)) }
       ]
     })
@@ -407,23 +434,97 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('items:findDuplicates', async () => {
-    const libPath = getCurrentPath()
-    if (!libPath) return []
-    const items = await listItems()
-    const byHash = new Map<string, unknown[]>()
-    for (const it of items) {
-      try {
-        const buf = await fs.readFile(join(libPath, it.original))
-        const h = createHash('sha256').update(buf).digest('hex')
-        const arr = byHash.get(h) ?? []
-        arr.push(it)
-        byHash.set(h, arr)
-      } catch {
-        // skip unreadable
-      }
+  ipcMain.handle('items:findDuplicates', () => (getCurrentPath() ? findDuplicates() : []))
+  ipcMain.handle('items:findSimilar', (_e, maxDistance?: number) =>
+    getCurrentPath() ? findSimilar(maxDistance) : []
+  )
+
+  // Open an item in the app that owns its file type, and watch it for saves.
+  ipcMain.handle('items:openExternal', async (_e, id: string): Promise<string | null> => {
+    const abs = await resolveAsset('original', id)
+    if (!abs) return 'File not found'
+    const err = await shell.openPath(abs)
+    if (!err) await watchItem(id, abs)
+    return err || null
+  })
+
+  // Import an Eagle library (read-only): pick the .library folder, confirm, import.
+  ipcMain.handle('eagle:import', async (e) => {
+    if (!getCurrentPath()) return null
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const pick = await dialog.showOpenDialog({
+      title: 'Choose an Eagle library (.library folder)',
+      properties: ['openDirectory']
+    })
+    if (pick.canceled || !pick.filePaths[0]) return null
+    let survey
+    try {
+      survey = await surveyEagle(pick.filePaths[0])
+    } catch (err) {
+      dialog.showErrorBox('Not an Eagle library', (err as Error).message)
+      return null
     }
-    return [...byHash.values()].filter((g) => g.length > 1)
+    const skip = survey.items - survey.supported
+    const opts = {
+      type: 'question' as const,
+      buttons: ['Cancel', 'Import'],
+      defaultId: 1,
+      cancelId: 0,
+      message: `Import "${survey.name}" from Eagle?`,
+      detail:
+        `${survey.supported} of ${survey.items} items can be imported` +
+        (skip ? ` (${skip} are file types DyskFiles does not support yet)` : '') +
+        `, with ${survey.folders} folders. Files are copied; the Eagle library is not changed.`
+    }
+    const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+    if (response !== 1) return null
+    let last = 0
+    const result = await importEagle(survey.path, (done, total) => {
+      const now = Date.now()
+      if (now - last > 150 || done === total) {
+        last = now
+        e.sender.send('eagle:progress', { done, total })
+      }
+    })
+    const lines = [`${result.imported.length} items imported, ${result.folders} new folders.`]
+    if (result.already) lines.push(`${result.already} were already in this library and were skipped.`)
+    if (result.unsupported) lines.push(`${result.unsupported} have a file type DyskFiles does not support yet.`)
+    if (result.missing) lines.push(`${result.missing} could not be read (file missing or damaged).`)
+    const done = { type: 'info' as const, message: 'Eagle import finished', detail: lines.join('\n') }
+    if (win) await dialog.showMessageBox(win, done)
+    else await dialog.showMessageBox(done)
+    return {
+      imported: result.imported.length,
+      unsupported: result.unsupported,
+      missing: result.missing,
+      already: result.already,
+      folders: result.folders
+    }
+  })
+
+  // Watched folders (auto import).
+  ipcMain.handle('watch:list', () => (getCurrentPath() ? listWatched() : []))
+  ipcMain.handle('watch:add', async () => {
+    if (!getCurrentPath()) return []
+    const pick = await dialog.showOpenDialog({
+      title: 'Choose a folder to watch',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    if (pick.canceled || !pick.filePaths[0]) return listWatched()
+    try {
+      const list = await addWatched(pick.filePaths[0])
+      await refreshFolderWatchers()
+      return list
+    } catch (err) {
+      dialog.showErrorBox('Cannot watch this folder', (err as Error).message)
+      return listWatched()
+    }
+  })
+  ipcMain.handle('watch:remove', async (_e, dir: string) => {
+    if (!getCurrentPath()) return []
+    const list = await removeWatched(dir)
+    await refreshFolderWatchers()
+    return list
   })
 
   ipcMain.handle('items:importFolder', async (_e, linked = false) => {
@@ -591,6 +692,7 @@ function registerIpc(): void {
                     : await dialog.showMessageBox(opts)
                   if (response !== 1) return resolve(null)
                   await deleteLibraryFiles(path)
+                  await syncWatchers()
                   await forgetLibrary(path)
                   return resolve({ action: 'delete', path })
                 }
@@ -619,6 +721,8 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+app.on('before-quit', () => stopWatchers())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

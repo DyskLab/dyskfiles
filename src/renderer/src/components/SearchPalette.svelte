@@ -17,6 +17,7 @@
     applySmartFolder
   } from '../lib/store'
   import { get } from 'svelte/store'
+  import { kindIcon } from '../lib/kind'
   import Icon from './Icon.svelte'
 
   const TABS = [
@@ -198,7 +199,7 @@
                 {#if item.thumbnail}
                   <img src={`asset://thumb/${item.id}?v=${$cacheBust}`} alt={item.name} loading="lazy" />
                 {:else}
-                  <span class="tfile"><Icon name={item.kind === 'video' ? 'film' : item.kind === 'audio' ? 'music' : 'note'} size={18} /></span>
+                  <span class="tfile"><Icon name={kindIcon(item.kind)} size={18} /></span>
                 {/if}
               </span>
               <span class="info">

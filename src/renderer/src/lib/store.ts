@@ -1,4 +1,5 @@
 import { derived, get, writable } from 'svelte/store'
+import { fontThumbnail, pdfThumbnail, type Thumb } from './render'
 
 export type View = 'all' | 'uncategorized' | 'untagged' | 'recent' | 'random' | 'alltags' | 'trash'
 
@@ -16,6 +17,14 @@ export const searchTab = writable<string>('document')
 export const sidebarCollapsed = writable<boolean>(false)
 export const duplicatesOpen = writable<boolean>(false)
 export const duplicateGroups = writable<RakItem[][]>([])
+/** 'identical' = same bytes; 'similar' = thumbnails that look alike. */
+export const duplicateMode = writable<'identical' | 'similar'>('identical')
+export const duplicatesBusy = writable<boolean>(false)
+/** Eagle import progress (null when no import is running). */
+export const eagleProgress = writable<{ done: number; total: number } | null>(null)
+/** Folders whose new files are imported automatically. */
+export const watchedFolders = writable<string[]>([])
+export const watchedOpen = writable<boolean>(false)
 /** Inline quick-search query + which fields it searches. */
 export const query = writable<string>('')
 export const filterBarOpen = writable<boolean>(true)
@@ -333,11 +342,70 @@ export async function refresh(): Promise<void> {
   await Promise.all([loadItems(), loadTrash()])
 }
 
-/** Scan for duplicate items and open the results modal. */
-export async function findDuplicates(): Promise<void> {
-  duplicateGroups.set(await window.rak.findDuplicates())
+/** Scan for duplicate items (in the current mode) and open the results modal. */
+export async function findDuplicates(mode = get(duplicateMode)): Promise<void> {
+  duplicateMode.set(mode)
   duplicatesOpen.set(true)
+  duplicatesBusy.set(true)
+  try {
+    duplicateGroups.set(
+      mode === 'similar' ? await window.rak.findSimilar() : await window.rak.findDuplicates()
+    )
+  } finally {
+    duplicatesBusy.set(false)
+  }
 }
+
+/** Import an Eagle library, then reload everything it may have touched. */
+export async function importEagleLibrary(): Promise<RakEagleResult | null> {
+  const stop = window.rak.onEagleProgress((p) => eagleProgress.set(p))
+  try {
+    const result = await window.rak.importEagle()
+    if (result) {
+      await Promise.all([loadItems(), loadTrash(), loadFolders(), loadTags()])
+      const lib = get(library)
+      if (lib) library.set({ ...lib, itemCount: get(items).length })
+      enrichDurations()
+      enrichThumbnails()
+    }
+    return result
+  } finally {
+    stop()
+    eagleProgress.set(null)
+  }
+}
+
+// ---------- watched folders ----------
+export async function loadWatched(): Promise<void> {
+  watchedFolders.set(await window.rak.listWatched())
+}
+export async function addWatchedFolder(): Promise<void> {
+  watchedFolders.set(await window.rak.addWatched())
+}
+export async function removeWatchedFolder(dir: string): Promise<void> {
+  watchedFolders.set(await window.rak.removeWatched(dir))
+}
+
+/** Open an item in its default app (the main process watches it for saves). */
+export async function openExternally(id: string): Promise<void> {
+  const err = await window.rak.openItemExternally(id)
+  if (err) alert(`Could not open the file: ${err}`)
+}
+
+/** Replace an item everywhere it is held, e.g. after it changed on disk. */
+function replaceItem(updated: RakItem): void {
+  items.update((cur) => cur.map((it) => (it.id === updated.id ? updated : it)))
+  trash.update((cur) => cur.map((it) => (it.id === updated.id ? updated : it)))
+}
+
+// Events pushed from the main process.
+window.rak.onItemsChanged((item) => {
+  replaceItem(item)
+  cacheBust.update((n) => n + 1)
+  enrichDurations()
+  enrichThumbnails()
+})
+window.rak.onItemsAdded((fresh) => addItems(fresh))
 
 export function setView(v: View): void {
   view.set(v)
@@ -415,10 +483,11 @@ export async function useLibrary(lib: RakLibrary): Promise<void> {
     loadFolders(),
     loadSmartFolders(),
     loadTags(),
-    loadLibraries()
+    loadLibraries(),
+    loadWatched()
   ])
   enrichDurations()
-  enrichVideoPosters()
+  enrichThumbnails()
 }
 
 // ---------- smart folders ----------
@@ -530,19 +599,47 @@ function captureVideoPoster(
   })
 }
 
-/** Generate poster thumbnails for any video items that don't have one yet. */
-export async function enrichVideoPosters(): Promise<void> {
+const RENDERED_KINDS = new Set<RakItemKind>(['video', 'pdf', 'font'])
+
+function renderThumbnail(it: RakItem): Promise<Thumb | null> {
+  if (it.kind === 'video') return captureVideoPoster(it)
+  const render = it.kind === 'pdf' ? pdfThumbnail : fontThumbnail
+  return render(it.id).catch((err) => {
+    console.error(`Cannot render a thumbnail for ${it.name}.${it.ext}:`, err)
+    return null
+  })
+}
+
+// Items whose thumbnail could not be drawn, keyed by id + modified time, so a
+// broken file is not retried on every pass but is retried once it changes.
+const thumbnailFailed = new Set<string>()
+
+/** Draw thumbnails for video, PDF and font items that don't have one yet. */
+export async function enrichThumbnails(): Promise<void> {
   if (posterizing) return
   posterizing = true
   try {
-    const vids = get(items).filter((it) => it.kind === 'video' && !it.thumbnail)
-    for (const it of vids) {
-      const poster = await captureVideoPoster(it)
-      if (!poster) continue
+    // Loop until nothing is left, so items added mid-run are not skipped.
+    for (;;) {
+      const todo = get(items).find(
+        (it) =>
+          RENDERED_KINDS.has(it.kind) &&
+          !it.thumbnail &&
+          !thumbnailFailed.has(`${it.id}@${it.dateModified}`)
+      )
+      if (!todo) break
+      const it = todo
+      const poster = await renderThumbnail(it)
+      if (!poster) {
+        thumbnailFailed.add(`${it.id}@${it.dateModified}`)
+        continue
+      }
       const updated = await window.rak.setItemThumbnail(it.id, poster.bytes, poster.width, poster.height)
       if (updated) {
         items.update((cur) => cur.map((x) => (x.id === it.id ? updated : x)))
         cacheBust.update((n) => n + 1)
+      } else {
+        thumbnailFailed.add(`${it.id}@${it.dateModified}`)
       }
     }
   } finally {
@@ -628,7 +725,7 @@ export async function emptyCacheReload(): Promise<void> {
   await window.rak.rebuildThumbnails()
   await loadItems()
   cacheBust.update((n) => n + 1)
-  enrichVideoPosters()
+  enrichThumbnails()
 }
 
 /** Persist a new manual ordering (full list of ids, first = top-left). */
@@ -647,10 +744,10 @@ export function addItems(fresh: RakItem[]): void {
   if (!fresh.length) return
   items.update((cur) => [...fresh, ...cur])
   library.update((lib) => (lib ? { ...lib, itemCount: lib.itemCount + fresh.length } : lib))
-  // Newly imported videos/audio need renderer-side enrichment (duration + poster).
-  if (fresh.some((it) => it.kind === 'video' || it.kind === 'audio')) {
+  // Some kinds need renderer-side enrichment (duration, poster, page or font preview).
+  if (fresh.some((it) => it.kind === 'audio' || RENDERED_KINDS.has(it.kind))) {
     enrichDurations()
-    enrichVideoPosters()
+    enrichThumbnails()
   }
 }
 

@@ -18,9 +18,18 @@
     showExtensionLabel
   } from '../lib/store'
   import Icon from './Icon.svelte'
+  import { kindIcon } from '../lib/kind'
+  import { untrack } from 'svelte'
 
   const GAP = 14
-  const LABEL_H = 48
+  const PAD = 16 // .grid-wrap padding: the canvas starts this far into the scroll area
+  const OVERSCAN = 800 // px rendered above and below the viewport
+  const LIST_ROW_H = 50
+  const LIST_GAP = 2
+  // Card label heights, matching the fixed line-heights in the .meta/.name/.info styles.
+  const META_PAD = 8
+  const NAME_H = 32
+  const INFO_H = 16
 
   const reorderable = $derived($view === 'all' && $sortKey === 'custom' && $sortDir === 'asc')
   const empty = $derived({
@@ -41,43 +50,116 @@
   let dragOverId = $state<string | null>(null)
   let internalDrag = false
 
+  let wrapEl = $state<HTMLElement | null>(null)
+  let scrollTop = $state(0)
+  let viewHeight = $state(0)
+
   const colCount = $derived(Math.max(1, Math.floor((containerWidth + GAP) / ($thumbSize + GAP))))
+  const metaH = $derived(
+    $showName || $showItemInfo ? META_PAD + ($showName ? NAME_H : 0) + ($showItemInfo ? INFO_H : 0) : 0
+  )
 
-  // ----- waterfall (masonry) -----
-  const columns = $derived.by(() => {
-    const n = colCount
-    const heights: number[] = new Array(n).fill(0)
-    const buckets: RakItem[][] = Array.from({ length: n }, () => [])
-    for (const it of $displayed) {
-      let min = 0
-      for (let i = 1; i < n; i++) if (heights[i] < heights[min]) min = i
-      buckets[min].push(it)
-      const ratio = it.width && it.height ? it.height / it.width : 0.75
-      heights[min] += $thumbSize * ratio + LABEL_H + GAP
-    }
-    return buckets
-  })
+  // ----- virtualized layout -----
+  // Every layout is computed as absolute boxes (canvas coordinates); only the boxes
+  // near the viewport are rendered, so the DOM stays small however big the library is.
+  interface Box {
+    it: RakItem
+    x: number
+    y: number
+    w: number
+    h: number // whole card, label included
+    th: number // thumbnail height
+  }
 
-  // ----- justified rows -----
-  const jrows = $derived.by(() => {
-    const targetH = Math.max(120, $thumbSize * 0.72)
-    const W = containerWidth || 1
-    const rows: { items: RakItem[]; h: number }[] = []
-    let row: RakItem[] = []
-    let arSum = 0
-    for (const it of $displayed) {
-      const a = it.width && it.height ? it.width / it.height : 4 / 3
-      row.push(it)
-      arSum += a
-      const rowW = arSum * targetH + GAP * (row.length - 1)
-      if (rowW >= W) {
-        rows.push({ items: row, h: (W - GAP * (row.length - 1)) / arSum })
-        row = []
+  const grid = $derived.by((): { boxes: Box[]; height: number } => {
+    const W = containerWidth
+    const items = $displayed
+    if (!W || !items.length) return { boxes: [], height: 0 }
+    const boxes: Box[] = new Array(items.length)
+    let height = 0
+
+    if ($layout === 'waterfall') {
+      const n = colCount
+      const cw = $thumbSize
+      const x0 = Math.max(0, (W - (n * cw + (n - 1) * GAP)) / 2)
+      const heights: number[] = new Array(n).fill(0)
+      items.forEach((it, i) => {
+        let min = 0
+        for (let c = 1; c < n; c++) if (heights[c] < heights[min]) min = c
+        const th = cw / aspect(it)
+        boxes[i] = { it, x: x0 + min * (cw + GAP), y: heights[min], w: cw, h: th + metaH, th }
+        heights[min] += th + metaH + GAP
+      })
+      height = Math.max(...heights) - GAP
+    } else if ($layout === 'justified') {
+      const targetH = Math.max(120, $thumbSize * 0.72)
+      let y = 0
+      let start = 0
+      let arSum = 0
+      const flush = (end: number, h: number): void => {
+        let x = 0
+        for (let i = start; i < end; i++) {
+          const w = h * aspect(items[i])
+          boxes[i] = { it: items[i], x, y, w, h, th: h }
+          x += w + GAP
+        }
+        y += h + GAP
+        start = end
         arSum = 0
       }
+      items.forEach((it, i) => {
+        arSum += aspect(it)
+        const count = i - start + 1
+        if (arSum * targetH + GAP * (count - 1) >= W) flush(i + 1, (W - GAP * (count - 1)) / arSum)
+      })
+      if (start < items.length) flush(items.length, targetH)
+      height = y - GAP
+    } else if ($layout === 'grid') {
+      const n = colCount
+      const cw = (W - GAP * (n - 1)) / n
+      const h = cw + metaH
+      items.forEach((it, i) => {
+        boxes[i] = { it, x: (i % n) * (cw + GAP), y: Math.floor(i / n) * (h + GAP), w: cw, h, th: cw }
+      })
+      height = Math.ceil(items.length / n) * (h + GAP) - GAP
+    } else {
+      items.forEach((it, i) => {
+        boxes[i] = { it, x: 0, y: i * (LIST_ROW_H + LIST_GAP), w: W, h: LIST_ROW_H, th: LIST_ROW_H }
+      })
+      height = items.length * (LIST_ROW_H + LIST_GAP) - LIST_GAP
     }
-    if (row.length) rows.push({ items: row, h: targetH })
-    return rows
+    return { boxes, height }
+  })
+
+  const visible = $derived.by(() => {
+    const top = scrollTop - PAD - OVERSCAN
+    const bottom = scrollTop - PAD + viewHeight + OVERSCAN
+    return grid.boxes.filter((b) => b.y + b.h >= top && b.y <= bottom)
+  })
+
+  let scrollFrame = 0
+  function onScroll() {
+    if (scrollFrame) return
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0
+      if (wrapEl) scrollTop = wrapEl.scrollTop
+    })
+  }
+
+  // Keep the selected item on screen (e.g. when the arrow keys move past the edge).
+  // Only a selection change triggers this, never a relayout or a resize.
+  $effect(() => {
+    const id = $selectedId
+    untrack(() => {
+      if (!id || !wrapEl) return
+      const b = grid.boxes.find((x) => x.it.id === id)
+      if (!b) return
+      const top = b.y + PAD
+      const bottom = top + b.h
+      const st = wrapEl.scrollTop
+      if (top < st + PAD) wrapEl.scrollTop = top - PAD
+      else if (bottom > st + wrapEl.clientHeight - PAD) wrapEl.scrollTop = bottom - wrapEl.clientHeight + PAD
+    })
   })
 
   function aspect(it: RakItem): number {
@@ -103,7 +185,8 @@
       case 'extension':
         return it.ext.toUpperCase()
       default:
-        return `${it.width} × ${it.height}`
+        // Fonts, audio and text have no pixel size: show the file size instead.
+        return it.width ? `${it.width} × ${it.height}` : fmtSize(it.size)
     }
   }
 
@@ -113,9 +196,7 @@
   function open(id: string) {
     openId.set(id)
   }
-  function fileIcon(kind: string): string {
-    return kind === 'video' ? 'film' : kind === 'audio' ? 'music' : 'note'
-  }
+  const fileIcon = kindIcon
 
   // ----- external file-drop import -----
   function onDragEnter(e: DragEvent) {
@@ -194,18 +275,14 @@
   }
 </script>
 
-{#snippet thumb(it: RakItem, rounded = true)}
-  <div class="thumb" class:rounded style="aspect-ratio:{it.width && it.height ? `${it.width}/${it.height}` : '4/3'}">
-    {#if it.thumbnail}
-      <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
-      {#if it.kind === 'video' || it.kind === 'audio'}
-        <span class="playbadge"><Icon name="play" size={16} /></span>
-      {/if}
-    {:else}
-      <div class="filethumb"><Icon name={fileIcon(it.kind)} size={30} strokeWidth={1.5} /><span>{it.ext}</span></div>
-    {/if}
-    {#if $showExtensionLabel}<span class="extlabel">{it.ext}</span>{/if}
-  </div>
+{#snippet thumbInner(it: RakItem)}
+  {#if it.thumbnail}
+    <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
+    {#if it.kind === 'video' || it.kind === 'audio'}<span class="playbadge"><Icon name="play" size={16} /></span>{/if}
+  {:else}
+    <div class="filethumb"><Icon name={fileIcon(it.kind)} size={30} strokeWidth={1.5} /><span>{it.ext}</span></div>
+  {/if}
+  {#if $showExtensionLabel}<span class="extlabel">{it.ext}</span>{/if}
 {/snippet}
 
 {#snippet meta(it: RakItem)}
@@ -217,28 +294,12 @@
   {/if}
 {/snippet}
 
-{#snippet card(it: RakItem)}
-  <button
-    class="card"
-    class:selected={$selectedId === it.id}
-    class:dragging={draggingId === it.id}
-    class:drop-target={dragOverId === it.id && draggingId !== it.id}
-    draggable={reorderable}
-    onclick={() => select(it.id)}
-    ondblclick={() => open(it.id)}
-    ondragstart={(e) => onCardDragStart(e, it.id)}
-    ondragover={(e) => onCardDragOver(e, it.id)}
-    ondrop={(e) => onCardDrop(e, it.id)}
-    ondragend={endCardDrag}
-  >
-    {@render thumb(it)}
-    {@render meta(it)}
-  </button>
-{/snippet}
-
 <section
   class="grid-wrap"
   class:drag-active={dragging}
+  bind:this={wrapEl}
+  bind:clientHeight={viewHeight}
+  onscroll={onScroll}
   ondragenter={onDragEnter}
   ondragleave={onDragLeave}
   ondragover={onDragOver}
@@ -252,101 +313,49 @@
       {#if empty.sub}<p class="empty-sub">{empty.sub}</p>{/if}
     </div>
   {:else}
-    <div class="canvas" bind:clientWidth={containerWidth}>
-      {#if $layout === 'waterfall'}
-        <div class="masonry" style="gap:{GAP}px">
-          {#each columns as col}
-            <div class="col" style="width:{$thumbSize}px; gap:{GAP}px">
-              {#each col as it (it.id)}{@render card(it)}{/each}
-            </div>
-          {/each}
-        </div>
-      {:else if $layout === 'justified'}
-        <div class="justified" style="gap:{GAP}px">
-          {#each jrows as r}
-            <div class="jrow" style="gap:{GAP}px; height:{r.h}px">
-              {#each r.items as it (it.id)}
-                <button
-                  class="card jcard"
-                  class:selected={$selectedId === it.id}
-                  class:dragging={draggingId === it.id}
-                  class:drop-target={dragOverId === it.id && draggingId !== it.id}
-                  draggable={reorderable}
-                  style="width:{r.h * aspect(it)}px"
-                  onclick={() => select(it.id)}
-                  ondblclick={() => open(it.id)}
-                  ondragstart={(e) => onCardDragStart(e, it.id)}
-                  ondragover={(e) => onCardDragOver(e, it.id)}
-                  ondrop={(e) => onCardDrop(e, it.id)}
-                  ondragend={endCardDrag}
-                >
-                  <div class="thumb jthumb">
-                    {#if it.thumbnail}
-                      <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
-                      {#if it.kind === 'video' || it.kind === 'audio'}<span class="playbadge"><Icon name="play" size={16} /></span>{/if}
-                    {:else}
-                      <div class="filethumb"><Icon name={fileIcon(it.kind)} size={30} strokeWidth={1.5} /><span>{it.ext}</span></div>
-                    {/if}
-                    {#if $showExtensionLabel}<span class="extlabel">{it.ext}</span>{/if}
-                  </div>
-                </button>
-              {/each}
-            </div>
-          {/each}
-        </div>
-      {:else if $layout === 'grid'}
-        <div class="uni" style="grid-template-columns:repeat(auto-fill,minmax({$thumbSize}px,1fr)); gap:{GAP}px">
-          {#each $displayed as it (it.id)}
-            <button
-              class="card"
-              class:selected={$selectedId === it.id}
-              class:dragging={draggingId === it.id}
-              class:drop-target={dragOverId === it.id && draggingId !== it.id}
-              draggable={reorderable}
-              onclick={() => select(it.id)}
-              ondblclick={() => open(it.id)}
-              ondragstart={(e) => onCardDragStart(e, it.id)}
-              ondragover={(e) => onCardDragOver(e, it.id)}
-              ondrop={(e) => onCardDrop(e, it.id)}
-              ondragend={endCardDrag}
-            >
-              <div class="thumb rounded square">
-                {#if it.thumbnail}
-                  <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
-                  {#if it.kind === 'video' || it.kind === 'audio'}<span class="playbadge"><Icon name="play" size={16} /></span>{/if}
-                {:else}
-                  <div class="filethumb"><Icon name={fileIcon(it.kind)} size={30} strokeWidth={1.5} /><span>{it.ext}</span></div>
-                {/if}
-                {#if $showExtensionLabel}<span class="extlabel">{it.ext}</span>{/if}
-              </div>
-              {@render meta(it)}
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <div class="list">
-          {#each $displayed as it (it.id)}
-            <button
-              class="lrow"
-              class:selected={$selectedId === it.id}
-              onclick={() => select(it.id)}
-              ondblclick={() => open(it.id)}
-            >
-              <span class="lthumb">
-                {#if it.thumbnail}
-                  <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
-                {:else}
-                  <span class="lfile"><Icon name={fileIcon(it.kind)} size={16} /></span>
-                {/if}
-              </span>
-              <span class="lname">{nameText(it)}</span>
-              <span class="ldim">{it.width} × {it.height}</span>
-              <span class="lsize">{fmtSize(it.size)}</span>
-              <span class="ldate">{fmtDate(it.importedAt)}</span>
-            </button>
-          {/each}
-        </div>
-      {/if}
+    <div class="canvas" bind:clientWidth={containerWidth} style="height:{grid.height}px">
+      {#each visible as b (b.it.id)}
+        {@const it = b.it}
+        {#if $layout === 'list'}
+          <button
+            class="lrow cell"
+            class:selected={$selectedId === it.id}
+            style="left:{b.x}px; top:{b.y}px; width:{b.w}px; height:{b.h}px"
+            onclick={() => select(it.id)}
+            ondblclick={() => open(it.id)}
+          >
+            <span class="lthumb">
+              {#if it.thumbnail}
+                <img src={`asset://thumb/${it.id}?v=${$cacheBust}`} alt={it.name} loading="lazy" />
+              {:else}
+                <span class="lfile"><Icon name={fileIcon(it.kind)} size={16} /></span>
+              {/if}
+            </span>
+            <span class="lname">{nameText(it)}</span>
+            <span class="ldim">{it.width ? `${it.width} × ${it.height}` : '—'}</span>
+            <span class="lsize">{fmtSize(it.size)}</span>
+            <span class="ldate">{fmtDate(it.importedAt)}</span>
+          </button>
+        {:else}
+          <button
+            class="card cell"
+            class:selected={$selectedId === it.id}
+            class:dragging={draggingId === it.id}
+            class:drop-target={dragOverId === it.id && draggingId !== it.id}
+            draggable={reorderable}
+            style="left:{b.x}px; top:{b.y}px; width:{b.w}px; height:{b.h}px"
+            onclick={() => select(it.id)}
+            ondblclick={() => open(it.id)}
+            ondragstart={(e) => onCardDragStart(e, it.id)}
+            ondragover={(e) => onCardDragOver(e, it.id)}
+            ondrop={(e) => onCardDrop(e, it.id)}
+            ondragend={endCardDrag}
+          >
+            <div class="thumb" style="height:{b.th}px">{@render thumbInner(it)}</div>
+            {#if $layout !== 'justified'}{@render meta(it)}{/if}
+          </button>
+        {/if}
+      {/each}
     </div>
   {/if}
 
@@ -366,48 +375,14 @@
     padding: 16px;
   }
   .canvas {
+    position: relative;
     width: 100%;
   }
-
-  /* waterfall */
-  .masonry {
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-  }
-  .col {
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* justified */
-  .justified {
-    display: flex;
-    flex-direction: column;
-  }
-  .jrow {
-    display: flex;
-  }
-  .jcard {
-    height: 100%;
-    flex-shrink: 0;
-  }
-  .jthumb {
-    height: 100%;
-    aspect-ratio: auto !important;
-  }
-
-  /* uniform grid */
-  .uni {
-    display: grid;
+  .cell {
+    position: absolute;
   }
 
   /* list */
-  .list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
   .lrow {
     display: grid;
     grid-template-columns: 52px 1fr 110px 90px 110px;
@@ -470,9 +445,6 @@
     overflow: hidden;
     background: var(--bg-elev);
     border: 1px solid var(--border);
-  }
-  .thumb.square {
-    aspect-ratio: 1 / 1 !important;
   }
   .thumb img {
     width: 100%;
@@ -554,8 +526,8 @@
   }
   .name {
     font-size: 12px;
-    line-height: 1.35;
-    max-height: 2.7em;
+    line-height: 16px; /* two lines = NAME_H */
+    max-height: 32px;
     overflow: hidden;
     text-overflow: ellipsis;
     display: -webkit-box;
@@ -567,6 +539,7 @@
   .info {
     color: var(--text-faint);
     font-size: 11px;
+    line-height: 14px; /* + margin = INFO_H */
     margin-top: 2px;
   }
 

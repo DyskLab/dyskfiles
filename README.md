@@ -43,17 +43,25 @@ On Intel Macs, [run it from source](#run-from-source).
 **Importing**
 - Drag and drop, a file picker, a whole folder, or a URL.
 - **Linked imports** reference files where they are, so the library holds only metadata and a thumbnail.
+- **Eagle libraries:** import a `.library` folder with its tags, folders, ratings, notes, and URLs. The Eagle library
+  is only read, and running it again skips what was already imported.
+- **Auto Import:** watch folders and copy in every new file that lands there, including files added while the app was
+  closed.
 
 **Media**
 - **Images:** WebP thumbnails up to 400px, made with [sharp](https://sharp.pixelplumbing.com/).
 - **Video and audio:** built-in players, with a poster frame captured automatically for video.
 - **Text and code:** a CodeMirror editor with syntax highlighting.
+- **PDF:** a thumbnail of the first page and a scrolling viewer with zoom, rendered with [pdf.js](https://mozilla.github.io/pdf.js/).
+- **Fonts** (TTF, OTF, WOFF, WOFF2): a sample thumbnail and a preview with your own text at several sizes.
+- **Open in default app:** edit a file in the app that owns it; when you save, DyskFiles notices and redraws it.
 
 **Organizing**
 - Multiple folders per item, tags with an All Tags page, and smart folders that save a filter.
 - Views for All, Uncategorized, Untagged, Recently Used, Random, and Trash.
 - Filters for type, color, shape, rating, dimensions, duration, size, dates, comment, note, and URL.
-- Search with a configurable scope, and duplicate detection by content hash.
+- Search with a configurable scope.
+- Duplicate detection for identical files (by content hash) and for similar-looking images (by perceptual hash).
 
 **Viewing and editing**
 - Waterfall, justified, grid, and list layouts, with zoom and sorting.
@@ -75,6 +83,7 @@ MyLibrary.dyskfiles/
 ├── tags.json                # tag list
 ├── filters.json             # smart folders
 ├── folders.json             # folders
+├── watch.json               # watched folders for Auto Import
 ├── pre/                     # files whose names start with "pre"
 │   ├── preview-l9x2ka.json  # one metadata file per item
 │   ├── preview-l9x2ka.png   # the original (left out for linked imports)
@@ -102,13 +111,15 @@ npm run dev
 | --- | --- |
 | `npm run build` | Bundles the app into `out/` |
 | `npm run check` | Runs `svelte-check` |
+| `npm test` | Runs the library tests with Vitest |
 | `npm run dist` | Builds the Apple Silicon DMG into `dist/` |
 
 ## Project structure
 
 - **`src/main/`** owns all file access: libraries and storage (`library.ts`), thumbnails (`thumbnail.ts`), saved
-  settings (`config.ts`), and the window, IPC handlers, and `asset://` protocol (`index.ts`).
-- **`src/preload/`** exposes a small typed `window.rak` API through `contextBridge`.
+  settings (`config.ts`), file watching for edited items and Auto Import (`watcher.ts`), and the window, IPC
+  handlers, and `asset://` protocol (`index.ts`).
+- **`src/preload/`** exposes a small typed `window.rak` API through `contextBridge` (types in `api.d.ts`).
 - **`src/renderer/`** is the Svelte 5 and TypeScript interface.
 
 ## Support

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import { openId } from '../lib/store'
+  import { openId, openExternally } from '../lib/store'
   import Icon from './Icon.svelte'
 
   let { item }: { item: RakItem } = $props()
@@ -25,6 +25,7 @@
     <Icon name={item.kind === 'audio' ? 'music' : 'film'} size={15} />
     <span class="name">{item.name}.{item.ext}</span>
     <span class="spacer"></span>
+    <button onclick={() => openExternally(item.id)} title="Open in default app"><Icon name="app" size={16} /></button>
     <button onclick={reveal} title="Reveal in Finder"><Icon name="reveal" size={16} /></button>
     <button onclick={close} title="Close"><Icon name="x" size={18} /></button>
   </div>

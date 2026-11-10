@@ -13,6 +13,8 @@
     showInspector,
     inspectorPinned,
     duplicatesOpen,
+    watchedOpen,
+    eagleProgress,
     filterBarOpen,
     useLibrary,
     loadPrefs,
@@ -31,6 +33,9 @@
   import Lightbox from './components/Lightbox.svelte'
   import MediaPlayer from './components/MediaPlayer.svelte'
   import Duplicates from './components/Duplicates.svelte'
+  import PdfViewer from './components/PdfViewer.svelte'
+  import FontViewer from './components/FontViewer.svelte'
+  import WatchedFolders from './components/WatchedFolders.svelte'
 
   const openItem = $derived(
     $openId ? ([...$items, ...$trash].find((i) => i.id === $openId) ?? null) : null
@@ -105,11 +110,57 @@
     <Duplicates />
   {/if}
 
+  {#if $watchedOpen}
+    <WatchedFolders />
+  {/if}
+
+  {#if $eagleProgress}
+    <div class="progress-toast" role="status">
+      <span>Importing from Eagle… {$eagleProgress.done} / {$eagleProgress.total}</span>
+      <span class="progress-track"><span class="progress-fill" style="width:{$eagleProgress.total ? (100 * $eagleProgress.done) / $eagleProgress.total : 0}%"></span></span>
+    </div>
+  {/if}
+
   {#if openItem?.kind === 'text'}
     <CodeEditor item={openItem} />
   {:else if openItem?.kind === 'video' || openItem?.kind === 'audio'}
     <MediaPlayer item={openItem} />
+  {:else if openItem?.kind === 'pdf'}
+    {#key openItem.id}<PdfViewer item={openItem} />{/key}
+  {:else if openItem?.kind === 'font'}
+    {#key openItem.id}<FontViewer item={openItem} />{/key}
   {:else if openItem}
     <Lightbox item={openItem} />
   {/if}
 {/if}
+
+<style>
+  .progress-toast {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 230;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 280px;
+    padding: 12px 14px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    font-size: 13px;
+  }
+  .progress-track {
+    height: 4px;
+    background: var(--bg-elev-2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s;
+  }
+</style>

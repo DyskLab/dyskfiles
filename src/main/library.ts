@@ -1,5 +1,6 @@
-import { promises as fs } from 'fs'
-import { basename, extname, join } from 'path'
+import { createReadStream, promises as fs } from 'fs'
+import { createHash } from 'crypto'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'path'
 import sharp from 'sharp'
 import { makeThumbnail, makeThumbnailFromBuffer } from './thumbnail'
 
@@ -14,7 +15,7 @@ export interface Library {
   path: string // absolute path on disk (not persisted inside library.json)
 }
 
-export type ItemKind = 'image' | 'text' | 'video' | 'audio'
+export type ItemKind = 'image' | 'text' | 'video' | 'audio' | 'pdf' | 'font'
 
 export interface Item {
   id: string
@@ -42,6 +43,8 @@ export interface Item {
   lastUsedAt: string | null // ISO timestamp of the last time the item was opened
   deletedAt: string | null // ISO timestamp when moved to trash, else null
   linked: boolean // true = `original` is an absolute path to an external file (not copied in)
+  eagleId?: string // id of the Eagle item this was imported from (prevents double imports)
+  dhash?: string // 64-bit difference hash of the thumbnail, hex (for "similar" detection)
 }
 
 export interface Folder {
@@ -53,19 +56,30 @@ export interface Folder {
 export const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff', '.avif', '.svg']
 export const VIDEO_EXTS = ['.mp4', '.webm', '.mov', '.m4v', '.mkv', '.avi', '.ogv']
 export const AUDIO_EXTS = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus']
+export const PDF_EXTS = ['.pdf']
+export const FONT_EXTS = ['.ttf', '.otf', '.woff', '.woff2']
 export const TEXT_EXTS = [
   '.txt', '.md', '.markdown', '.json', '.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx',
   '.css', '.scss', '.less', '.html', '.htm', '.xml', '.yml', '.yaml', '.csv', '.log',
   '.sh', '.bash', '.zsh', '.py', '.java', '.c', '.h', '.cpp', '.cs', '.go', '.rs',
   '.php', '.rb', '.sql', '.toml', '.ini', '.conf', '.env'
 ]
-export const SUPPORTED_EXTS = [...IMAGE_EXTS, ...VIDEO_EXTS, ...AUDIO_EXTS, ...TEXT_EXTS]
+export const SUPPORTED_EXTS = [
+  ...IMAGE_EXTS,
+  ...VIDEO_EXTS,
+  ...AUDIO_EXTS,
+  ...PDF_EXTS,
+  ...FONT_EXTS,
+  ...TEXT_EXTS
+]
 
 function kindForExt(ext: string): ItemKind {
   const e = ext.toLowerCase()
   if (IMAGE_EXTS.includes(e)) return 'image'
   if (VIDEO_EXTS.includes(e)) return 'video'
   if (AUDIO_EXTS.includes(e)) return 'audio'
+  if (PDF_EXTS.includes(e)) return 'pdf'
+  if (FONT_EXTS.includes(e)) return 'font'
   return 'text'
 }
 
@@ -172,7 +186,13 @@ async function writeMeta(libPath: string, meta: LibraryMeta): Promise<void> {
   await writeJson(libraryJsonPath(libPath), meta)
 }
 
-const RESERVED_ENTRIES = new Set(['library.json', 'tags.json', 'filters.json', 'folders.json'])
+const RESERVED_ENTRIES = new Set([
+  'library.json',
+  'tags.json',
+  'filters.json',
+  'folders.json',
+  'watch.json'
+])
 
 /** Scan every item metadata file in a library from disk, keyed by id. */
 async function scanItems(libPath: string): Promise<Map<string, Item>> {
@@ -423,8 +443,8 @@ async function updateItemCount(libPath: string): Promise<void> {
   await writeMeta(libPath, meta)
 }
 
-/** Expand any directories in `paths` into a flat list of supported image files. */
-async function expandToImages(paths: string[]): Promise<string[]> {
+/** Expand any directories in `paths` into a flat list of supported files. */
+export async function expandToSupported(paths: string[]): Promise<string[]> {
   const out: string[] = []
   for (const p of paths) {
     let stat
@@ -434,15 +454,116 @@ async function expandToImages(paths: string[]): Promise<string[]> {
       continue
     }
     if (stat.isDirectory()) {
-      const entries = await fs.readdir(p, { withFileTypes: true })
+      let entries
+      try {
+        entries = await fs.readdir(p, { withFileTypes: true })
+      } catch {
+        continue
+      }
       // Skip hidden files/folders (e.g. .DS_Store, .git).
       const children = entries.filter((e) => !e.name.startsWith('.')).map((e) => join(p, e.name))
-      out.push(...(await expandToImages(children)))
+      out.push(...(await expandToSupported(children)))
     } else if (SUPPORTED_EXTS.includes(extname(p).toLowerCase())) {
       out.push(p)
     }
   }
   return out
+}
+
+/** Metadata an importer may carry over onto a freshly imported item. */
+type ImportMeta = Partial<
+  Pick<Item, 'name' | 'tags' | 'rating' | 'note' | 'url' | 'deletedAt' | 'eagleId'>
+>
+
+/** The next manual-order value that sorts above every existing item. */
+async function topOrder(libPath: string): Promise<number> {
+  return (await readItemsAt(libPath)).reduce((min, it) => Math.min(min, it.order ?? 0), 0) - 1
+}
+
+/**
+ * Import one file into the library: copy it in (or link it in place), make a
+ * thumbnail for images, and write its metadata. Returns null if it failed, after
+ * removing anything it had written.
+ */
+async function importFile(
+  libPath: string,
+  src: string,
+  order: number,
+  opts: { folderIds?: string[]; linked?: boolean; meta?: ImportMeta } = {}
+): Promise<Item | null> {
+  const ext = extname(src).toLowerCase()
+  if (!SUPPORTED_EXTS.includes(ext)) return null
+  const linked = opts.linked ?? false
+
+  const displayName = opts.meta?.name || basename(src, extname(src))
+  const id = makeId(displayName)
+  const kind = kindForExt(ext)
+  const bucket = bucketFor(id)
+  const originalRel = join(bucket, `${id}${ext}`) // only used when copying
+  const copyDest = join(libPath, originalRel)
+  const thumbnailRel = kind === 'image' ? join(bucket, `${id}.webp`) : ''
+  const thumbnailAbs = thumbnailRel ? join(libPath, thumbnailRel) : ''
+
+  try {
+    await fs.mkdir(join(libPath, bucket), { recursive: true })
+    // Stat the source first so we can keep its real modified/created times.
+    const srcStat = await fs.stat(src)
+    // Linked import references the source in place; copy import duplicates it in.
+    if (!linked) await fs.copyFile(src, copyDest)
+    const imgSource = linked ? src : copyDest
+
+    let width = 0
+    let height = 0
+    let color: string | null = null
+    let colors: string[] = []
+    if (kind === 'image') {
+      const meta = await makeThumbnail(imgSource, thumbnailAbs)
+      width = meta.width
+      height = meta.height
+      color = meta.color
+      colors = meta.colors
+    }
+    const size = linked ? srcStat.size : (await fs.stat(copyDest)).size
+    const created =
+      srcStat.birthtime && srcStat.birthtime.getTime() > 0 ? srcStat.birthtime : srcStat.mtime
+
+    const item: Item = {
+      id,
+      name: displayName,
+      ext: ext.replace(/^\./, ''),
+      kind,
+      size,
+      width,
+      height,
+      importedAt: new Date().toISOString(),
+      dateModified: srcStat.mtime.toISOString(),
+      dateCreated: created.toISOString(),
+      rating: opts.meta?.rating ?? 0,
+      duration: null,
+      color,
+      colors,
+      comment: '',
+      note: opts.meta?.note ?? '',
+      url: opts.meta?.url ?? '',
+      order,
+      original: linked ? src : originalRel,
+      thumbnail: thumbnailRel,
+      tags: opts.meta?.tags ?? [],
+      folderIds: opts.folderIds ?? [],
+      lastUsedAt: null,
+      deletedAt: opts.meta?.deletedAt ?? null,
+      linked
+    }
+    if (opts.meta?.eagleId) item.eagleId = opts.meta.eagleId
+    await saveItem(libPath, item)
+    return item
+  } catch (err) {
+    // Roll back partial files for this item (never the external source).
+    if (!linked) await fs.rm(copyDest, { force: true })
+    if (thumbnailAbs) await fs.rm(thumbnailAbs, { force: true })
+    console.error(`Failed to import ${src}:`, err)
+    return null
+  }
 }
 
 export async function importPaths(
@@ -452,85 +573,20 @@ export async function importPaths(
 ): Promise<Item[]> {
   const libPath = requireCurrent()
   const imported: Item[] = []
-  // Accept files and folders (folders are walked recursively for images).
-  const sources = await expandToImages(paths)
+  // Accept files and folders (folders are walked recursively).
+  const sources = await expandToSupported(paths)
   // New items sort to the top: give them orders below the current minimum.
-  const existing = await readItemsAt(libPath)
-  let nextOrder = existing.reduce((min, it) => Math.min(min, it.order ?? 0), 0) - 1
-
+  let nextOrder = await topOrder(libPath)
   for (const src of sources) {
-    const ext = extname(src).toLowerCase()
-    if (!SUPPORTED_EXTS.includes(ext)) continue
-
-    const displayName = basename(src, extname(src))
-    const id = makeId(displayName)
-    const kind = kindForExt(ext)
-    const bucket = bucketFor(id)
-    const originalRel = join(bucket, `${id}${ext}`) // only used when copying
-    const copyDest = join(libPath, originalRel)
-    const thumbnailRel = kind === 'image' ? join(bucket, `${id}.webp`) : ''
-    const thumbnailAbs = thumbnailRel ? join(libPath, thumbnailRel) : ''
-
-    try {
-      await fs.mkdir(join(libPath, bucket), { recursive: true })
-      // Stat the source first so we can keep its real modified/created times.
-      const srcStat = await fs.stat(src)
-      // Linked import references the source in place; copy import duplicates it in.
-      if (!linked) await fs.copyFile(src, copyDest)
-      const imgSource = linked ? src : copyDest
-
-      let width = 0
-      let height = 0
-      let color: string | null = null
-      let colors: string[] = []
-      if (kind === 'image') {
-        const meta = await makeThumbnail(imgSource, thumbnailAbs)
-        width = meta.width
-        height = meta.height
-        color = meta.color
-        colors = meta.colors
-      }
-      const size = linked ? srcStat.size : (await fs.stat(copyDest)).size
-      const created =
-        srcStat.birthtime && srcStat.birthtime.getTime() > 0 ? srcStat.birthtime : srcStat.mtime
-
-      const item: Item = {
-        id,
-        name: displayName,
-        ext: ext.replace(/^\./, ''),
-        kind,
-        size,
-        width,
-        height,
-        importedAt: new Date().toISOString(),
-        dateModified: srcStat.mtime.toISOString(),
-        dateCreated: created.toISOString(),
-        rating: 0,
-        duration: null,
-        color,
-        colors,
-        comment: '',
-        note: '',
-        url: '',
-        order: nextOrder--,
-        original: linked ? src : originalRel,
-        thumbnail: thumbnailRel,
-        tags: [],
-        folderIds: folderId ? [folderId] : [],
-        lastUsedAt: null,
-        deletedAt: null,
-        linked
-      }
-      await saveItem(libPath, item)
+    const item = await importFile(libPath, src, nextOrder, {
+      folderIds: folderId ? [folderId] : [],
+      linked
+    })
+    if (item) {
       imported.push(item)
-    } catch (err) {
-      // Roll back partial files for this item (never the external source), then continue.
-      if (!linked) await fs.rm(copyDest, { force: true })
-      if (thumbnailAbs) await fs.rm(thumbnailAbs, { force: true })
-      console.error(`Failed to import ${src}:`, err)
+      nextOrder--
     }
   }
-
   if (imported.length) await updateItemCount(libPath)
   return imported
 }
@@ -982,4 +1038,492 @@ export async function writeText(id: string, content: string): Promise<Item | nul
   } catch {
     return null
   }
+}
+
+// ---------- external edits ----------
+
+/** What a file looked like at one moment, to tell a real change from a spurious event. */
+export interface FileStamp {
+  mtimeMs: number
+  size: number
+}
+
+/** The current stamp of an item's original, or null if it cannot be read. */
+export async function fileStamp(id: string): Promise<FileStamp | null> {
+  const libPath = requireCurrent()
+  const item = await readItem(libPath, id)
+  if (!item) return null
+  try {
+    const st = await fs.stat(originalAbs(libPath, item))
+    return { mtimeMs: st.mtimeMs, size: st.size }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Re-read an item's original after it changed on disk (e.g. saved from another
+ * app): refresh size and modified time, and rebuild what is derived from the
+ * bytes. Images get a new thumbnail here; video, PDF and font thumbnails are made
+ * in the renderer, so they are cleared for it to redraw.
+ *
+ * Returns null when the file is gone or still matches `since` — the stamp taken
+ * when watching began. (The item's own `dateModified` cannot be used for that: it
+ * is the source file's time, and a copy in the library has a time of its own.)
+ */
+export async function refreshItemFromDisk(id: string, since: FileStamp): Promise<Item | null> {
+  const libPath = requireCurrent()
+  const item = await readItem(libPath, id)
+  if (!item) return null
+  const abs = originalAbs(libPath, item)
+  let st
+  try {
+    st = await fs.stat(abs)
+  } catch {
+    return null
+  }
+  if (st.mtimeMs === since.mtimeMs && st.size === since.size) return null
+  const mtime = st.mtime.toISOString()
+
+  item.size = st.size
+  item.dateModified = mtime
+  delete item.dhash
+  if (item.kind === 'image') {
+    const thumbRel = item.thumbnail || join(bucketFor(id), `${id}.webp`)
+    try {
+      const meta = await makeThumbnail(abs, join(libPath, thumbRel))
+      item.thumbnail = thumbRel
+      item.width = meta.width
+      item.height = meta.height
+      item.color = meta.color
+      item.colors = meta.colors
+    } catch (err) {
+      console.error(`Failed to refresh thumbnail for ${id}:`, err)
+    }
+  } else if (item.kind !== 'text') {
+    if (item.thumbnail) await fs.rm(join(libPath, item.thumbnail), { force: true })
+    item.thumbnail = ''
+    if (item.kind === 'video' || item.kind === 'audio') item.duration = null
+  }
+  await saveItem(libPath, item)
+  return item
+}
+
+// ---------- duplicates ----------
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
+/**
+ * Groups of items whose files are byte-for-byte identical (2+ per group). Only
+ * files that share a size are hashed, and they are streamed, never read whole.
+ */
+export async function findDuplicates(): Promise<Item[][]> {
+  const libPath = requireCurrent()
+  const items = (await readItemsAt(libPath)).filter((it) => !it.deletedAt)
+  const bySize = new Map<number, Item[]>()
+  for (const it of items) {
+    const list = bySize.get(it.size) ?? []
+    list.push(it)
+    bySize.set(it.size, list)
+  }
+  const groups: Item[][] = []
+  for (const sameSize of bySize.values()) {
+    if (sameSize.length < 2) continue
+    const byHash = new Map<string, Item[]>()
+    for (const it of sameSize) {
+      try {
+        const h = await sha256File(originalAbs(libPath, it))
+        const list = byHash.get(h) ?? []
+        list.push(it)
+        byHash.set(h, list)
+      } catch {
+        // Unreadable (e.g. a linked file that moved) — skip it.
+      }
+    }
+    for (const g of byHash.values()) if (g.length > 1) groups.push(g)
+  }
+  // Keep the earliest import first in each group.
+  for (const g of groups) g.sort((a, b) => a.importedAt.localeCompare(b.importedAt))
+  return groups
+}
+
+/** 64-bit difference hash of an image file, as 16 hex characters. */
+export async function dhashFile(path: string): Promise<string> {
+  const data = await sharp(path, { failOn: 'none' })
+    .resize(9, 8, { fit: 'fill' })
+    .grayscale()
+    .raw()
+    .toBuffer()
+  let hex = ''
+  for (let row = 0; row < 8; row++) {
+    let byte = 0
+    for (let col = 0; col < 8; col++) {
+      byte = (byte << 1) | (data[row * 9 + col] > data[row * 9 + col + 1] ? 1 : 0)
+    }
+    hex += byte.toString(16).padStart(2, '0')
+  }
+  return hex
+}
+
+function popcount32(n: number): number {
+  n = n - ((n >>> 1) & 0x55555555)
+  n = (n & 0x33333333) + ((n >>> 2) & 0x33333333)
+  return (((n + (n >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24
+}
+
+/**
+ * Groups of visually similar images and videos (2+ per group), by comparing the
+ * difference hashes of their thumbnails: `maxDistance` is how many of the 64 bits
+ * may differ. Hashes are computed once and stored on the item.
+ */
+export async function findSimilar(maxDistance = 8): Promise<Item[][]> {
+  const libPath = requireCurrent()
+  const items = (await readItemsAt(libPath)).filter(
+    (it) => !it.deletedAt && it.thumbnail && (it.kind === 'image' || it.kind === 'video')
+  )
+  await forEachLimit(items, 8, async (it) => {
+    if (it.dhash) return
+    try {
+      it.dhash = await dhashFile(join(libPath, it.thumbnail))
+      await saveItem(libPath, it)
+    } catch {
+      // Thumbnail missing or unreadable — leave it out.
+    }
+  })
+  const hashed = items.filter((it) => it.dhash)
+  const hi = hashed.map((it) => parseInt(it.dhash!.slice(0, 8), 16) | 0)
+  const lo = hashed.map((it) => parseInt(it.dhash!.slice(8), 16) | 0)
+
+  // Union-find over every pair within the distance.
+  const parent = hashed.map((_, i) => i)
+  const find = (i: number): number => {
+    while (parent[i] !== i) i = parent[i] = parent[parent[i]]
+    return i
+  }
+  for (let i = 0; i < hashed.length; i++) {
+    for (let j = i + 1; j < hashed.length; j++) {
+      if (popcount32(hi[i] ^ hi[j]) + popcount32(lo[i] ^ lo[j]) <= maxDistance) {
+        parent[find(i)] = find(j)
+      }
+    }
+  }
+  const byRoot = new Map<number, Item[]>()
+  hashed.forEach((it, i) => {
+    const r = find(i)
+    const list = byRoot.get(r) ?? []
+    list.push(it)
+    byRoot.set(r, list)
+  })
+  const groups = [...byRoot.values()].filter((g) => g.length > 1)
+  // Keep the highest-resolution copy first.
+  for (const g of groups) g.sort((a, b) => b.width * b.height - a.width * a.height)
+  return groups
+}
+
+// ---------- Eagle import ----------
+
+interface EagleFolderNode {
+  id: string
+  name: string
+  children: EagleFolderNode[]
+}
+
+interface EagleEntry {
+  id: string
+  name: string
+  ext: string
+  tags: string[]
+  folders: string[]
+  isDeleted: boolean
+  url: string
+  annotation: string
+  star: number
+  dir: string
+}
+
+export interface EagleSummary {
+  path: string
+  name: string
+  items: number
+  supported: number
+  folders: number
+}
+
+export interface EagleResult {
+  imported: Item[]
+  unsupported: number
+  missing: number
+  already: number
+  folders: number
+}
+
+function asStringList(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x !== '') : []
+}
+
+function parseEagleFolders(v: unknown): EagleFolderNode[] {
+  if (!Array.isArray(v)) return []
+  return v.flatMap((f) => {
+    if (!f || typeof f !== 'object') return []
+    const r = f as Record<string, unknown>
+    if (typeof r.id !== 'string' || typeof r.name !== 'string') return []
+    return [{ id: r.id, name: r.name, children: parseEagleFolders(r.children) }]
+  })
+}
+
+async function readEagleLibrary(
+  root: string
+): Promise<{ folders: EagleFolderNode[]; entries: EagleEntry[] }> {
+  let rootMeta: Record<string, unknown>
+  try {
+    rootMeta = await readJson<Record<string, unknown>>(join(root, 'metadata.json'))
+    await fs.access(join(root, 'images'))
+  } catch {
+    throw new Error('Not an Eagle library: it needs metadata.json and an images folder.')
+  }
+  const entries: EagleEntry[] = []
+  const dirs = (await fs.readdir(join(root, 'images'), { withFileTypes: true })).filter(
+    (d) => d.isDirectory() && d.name.endsWith('.info')
+  )
+  await forEachLimit(dirs, 16, async (d) => {
+    const dir = join(root, 'images', d.name)
+    try {
+      const m = await readJson<Record<string, unknown>>(join(dir, 'metadata.json'))
+      if (typeof m.id !== 'string' || typeof m.name !== 'string') return
+      const star = typeof m.star === 'number' ? Math.max(0, Math.min(5, Math.round(m.star))) : 0
+      entries.push({
+        id: m.id,
+        name: m.name,
+        ext: typeof m.ext === 'string' ? m.ext.replace(/^\./, '').toLowerCase() : '',
+        tags: asStringList(m.tags),
+        folders: asStringList(m.folders),
+        isDeleted: m.isDeleted === true,
+        url: typeof m.url === 'string' ? m.url : '',
+        annotation: typeof m.annotation === 'string' ? m.annotation : '',
+        star,
+        dir
+      })
+    } catch {
+      // Unreadable item metadata — skip it.
+    }
+  })
+  return { folders: parseEagleFolders(rootMeta.folders), entries }
+}
+
+/** The original file inside an Eagle item folder (not its metadata or thumbnail). */
+async function eagleOriginal(entry: EagleEntry): Promise<string | null> {
+  const wanted = entry.ext ? `${entry.name}.${entry.ext}` : entry.name
+  let files: string[]
+  try {
+    files = await fs.readdir(entry.dir)
+  } catch {
+    return null
+  }
+  if (files.includes(wanted)) return join(entry.dir, wanted)
+  const thumb = `${entry.name}_thumbnail`
+  const other = files.find(
+    (f) => f !== 'metadata.json' && basename(f, extname(f)) !== thumb && !f.startsWith('.')
+  )
+  return other ? join(entry.dir, other) : null
+}
+
+function countEagleFolders(nodes: EagleFolderNode[]): number {
+  return nodes.reduce((n, f) => n + 1 + countEagleFolders(f.children), 0)
+}
+
+/** What an Eagle library holds, read without importing anything. */
+export async function surveyEagle(root: string): Promise<EagleSummary> {
+  const { folders, entries } = await readEagleLibrary(root)
+  return {
+    path: root,
+    name: basename(root, extname(root)),
+    items: entries.length,
+    supported: entries.filter((e) => SUPPORTED_EXTS.includes(`.${e.ext}`)).length,
+    folders: countEagleFolders(folders)
+  }
+}
+
+/**
+ * Import an Eagle library into the current one. The Eagle library is only read.
+ * Folders are flattened as "Parent / Child", and tags, rating, note, URL and
+ * trash state come across. Items imported before (by Eagle id) are skipped, so
+ * running it twice does not duplicate anything.
+ */
+export async function importEagle(
+  root: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<EagleResult> {
+  const libPath = requireCurrent()
+  const { folders, entries } = await readEagleLibrary(root)
+
+  // Folders: reuse one with the same name, create the rest in one write.
+  const ours = await listFolders()
+  const folderMap = new Map<string, string>()
+  let createdFolders = 0
+  const walk = (nodes: EagleFolderNode[], prefix: string): void => {
+    for (const node of nodes) {
+      const name = prefix ? `${prefix} / ${node.name}` : node.name
+      let folder = ours.find((f) => f.name === name)
+      if (!folder) {
+        folder = { id: makeId(name), name, createdAt: new Date().toISOString() }
+        ours.push(folder)
+        createdFolders++
+      }
+      folderMap.set(node.id, folder.id)
+      walk(node.children, name)
+    }
+  }
+  walk(folders, '')
+  if (createdFolders) await writeJson(join(libPath, 'folders.json'), ours)
+
+  const known = new Set((await readItemsAt(libPath)).map((it) => it.eagleId).filter(Boolean))
+  const result: EagleResult = { imported: [], unsupported: 0, missing: 0, already: 0, folders: createdFolders }
+  const tags = new Set(await listTags())
+  let nextOrder = await topOrder(libPath)
+  let done = 0
+
+  for (const entry of entries) {
+    onProgress?.(done++, entries.length)
+    if (known.has(entry.id)) {
+      result.already++
+      continue
+    }
+    if (!SUPPORTED_EXTS.includes(`.${entry.ext}`)) {
+      result.unsupported++
+      continue
+    }
+    const src = await eagleOriginal(entry)
+    if (!src) {
+      result.missing++
+      continue
+    }
+    const item = await importFile(libPath, src, nextOrder, {
+      folderIds: entry.folders.map((id) => folderMap.get(id)).filter((x): x is string => !!x),
+      meta: {
+        name: entry.name,
+        tags: entry.tags,
+        rating: entry.star,
+        note: entry.annotation,
+        url: entry.url,
+        deletedAt: entry.isDeleted ? new Date().toISOString() : null,
+        eagleId: entry.id
+      }
+    })
+    if (!item) {
+      result.missing++
+      continue
+    }
+    nextOrder--
+    entry.tags.forEach((t) => tags.add(t))
+    result.imported.push(item)
+  }
+  onProgress?.(entries.length, entries.length)
+  await writeJson(join(libPath, 'tags.json'), [...tags])
+  if (result.imported.length) await updateItemCount(libPath)
+  return result
+}
+
+// ---------- watched folders (auto import) ----------
+
+interface WatchState {
+  folders: string[]
+  seen: Record<string, number> // absolute path → mtime (ms) when it was seen
+}
+
+async function readWatch(libPath: string): Promise<WatchState> {
+  try {
+    const w = await readJson<Partial<WatchState>>(join(libPath, 'watch.json'))
+    return { folders: asStringList(w.folders), seen: w.seen ?? {} }
+  } catch {
+    return { folders: [], seen: {} }
+  }
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = relative(parent, child)
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
+export async function listWatched(): Promise<string[]> {
+  return (await readWatch(requireCurrent())).folders
+}
+
+/**
+ * Start watching a folder. Files already in it are marked as seen and are not
+ * imported — only files that arrive from now on are.
+ */
+export async function addWatched(dir: string): Promise<string[]> {
+  const libPath = requireCurrent()
+  const abs = resolve(dir)
+  if (isInside(abs, libPath) || isInside(libPath, abs)) {
+    throw new Error('A watched folder cannot contain, or be inside, the library.')
+  }
+  const state = await readWatch(libPath)
+  if (!state.folders.includes(abs)) {
+    state.folders.push(abs)
+    for (const f of await expandToSupported([abs])) {
+      try {
+        state.seen[f] = (await fs.stat(f)).mtimeMs
+      } catch {
+        // Vanished while scanning.
+      }
+    }
+    await writeJson(join(libPath, 'watch.json'), state)
+  }
+  return state.folders
+}
+
+export async function removeWatched(dir: string): Promise<string[]> {
+  const libPath = requireCurrent()
+  const state = await readWatch(libPath)
+  state.folders = state.folders.filter((f) => f !== dir)
+  for (const p of Object.keys(state.seen)) {
+    if (isInside(p, dir) && !state.folders.some((f) => isInside(p, f))) delete state.seen[p]
+  }
+  await writeJson(join(libPath, 'watch.json'), state)
+  return state.folders
+}
+
+/**
+ * Import every file that appeared in a watched folder since it was last seen.
+ * Files modified in the last `settleMs` are left for the next pass, so a file
+ * still being written or downloaded is not imported half-done.
+ */
+export async function importFromWatched(
+  settleMs = 1500
+): Promise<{ imported: Item[]; pending: number }> {
+  const libPath = requireCurrent()
+  const state = await readWatch(libPath)
+  const imported: Item[] = []
+  let pending = 0
+  if (!state.folders.length) return { imported, pending }
+  let nextOrder = await topOrder(libPath)
+  let changed = false
+  for (const f of await expandToSupported(state.folders)) {
+    if (state.seen[f] !== undefined) continue
+    let st
+    try {
+      st = await fs.stat(f)
+    } catch {
+      continue
+    }
+    if (settleMs > 0 && Date.now() - st.mtimeMs < settleMs) {
+      pending++
+      continue
+    }
+    state.seen[f] = st.mtimeMs
+    changed = true
+    const item = await importFile(libPath, f, nextOrder)
+    if (item) {
+      imported.push(item)
+      nextOrder--
+    }
+  }
+  if (changed) await writeJson(join(libPath, 'watch.json'), state)
+  if (imported.length) await updateItemCount(libPath)
+  return { imported, pending }
 }

@@ -9,12 +9,14 @@
     restoreItem,
     deleteForever,
     updateItemMeta,
+    openExternally,
     addFolder,
     cacheBust,
     hexToRgb
   } from '../lib/store'
   import { tooltip } from '../lib/tooltip'
   import Icon from './Icon.svelte'
+  import { kindIcon } from '../lib/kind'
 
   const item = $derived($displayed.find((it) => it.id === $selectedId) ?? null)
   const trashed = $derived(!!item?.deletedAt)
@@ -92,7 +94,7 @@
     return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
   }
   function fileIcon(kind: string): string {
-    return kind === 'video' ? 'film' : kind === 'audio' ? 'music' : kind === 'text' ? 'note' : 'image'
+    return kindIcon(kind)
   }
 
   function setRating(n: number) {
@@ -171,17 +173,17 @@
           <span class="badge">{item.ext.toUpperCase()}</span>
           <img src={`asset://original/${item.id}`} alt={item.name} />
         </button>
-      {:else if item.thumbnail && (item.kind === 'video' || item.kind === 'audio')}
-        <button class="imgbtn" onclick={() => openId.set(item.id)} title="Play">
+      {:else if item.thumbnail && item.kind !== 'text'}
+        <button class="imgbtn" onclick={() => openId.set(item.id)} title={item.kind === 'video' || item.kind === 'audio' ? 'Play' : 'Open'}>
           <span class="badge">{item.ext.toUpperCase()}</span>
           <img src={`asset://thumb/${item.id}?v=${$cacheBust}`} alt={item.name} />
-          <span class="playover"><Icon name="play" size={26} /></span>
+          {#if item.kind === 'video' || item.kind === 'audio'}<span class="playover"><Icon name="play" size={26} /></span>{/if}
         </button>
       {:else}
         <button class="filebig" onclick={() => openId.set(item.id)}>
           <Icon name={fileIcon(item.kind)} size={40} strokeWidth={1.4} />
           <span class="ext">{item.ext.toUpperCase()}</span>
-          <span class="openhint">{item.kind === 'text' ? 'Open in editor' : 'Play'}</span>
+          <span class="openhint">{item.kind === 'text' ? 'Open in editor' : item.kind === 'video' || item.kind === 'audio' ? 'Play' : 'Open'}</span>
         </button>
       {/if}
     </div>
@@ -285,6 +287,7 @@
         {:else}
           <button class="export" onclick={exportItem}><Icon name="reveal" size={15} /> Export</button>
           <div class="minirow">
+            <button class="mini" onclick={() => openExternally(item.id)} title="Open in default app"><Icon name="app" size={14} /></button>
             <button class="mini" onclick={reveal} title="Reveal in Finder"><Icon name="folder" size={14} /></button>
             <button class="mini danger" onclick={trash} title="Delete"><Icon name="trash" size={14} /></button>
           </div>

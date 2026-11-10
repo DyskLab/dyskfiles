@@ -1,5 +1,6 @@
 import { derived, get, writable } from 'svelte/store'
 import { fontThumbnail, pdfThumbnail, type Thumb } from './render'
+import { matchTerms, parseQuery, type SearchField } from './query'
 
 export type View = 'all' | 'uncategorized' | 'untagged' | 'recent' | 'random' | 'alltags' | 'trash'
 
@@ -29,8 +30,7 @@ export const watchedOpen = writable<boolean>(false)
 export const query = writable<string>('')
 export const filterBarOpen = writable<boolean>(true)
 
-export type SearchField =
-  | 'name' | 'folderName' | 'folderDesc' | 'extension' | 'tags' | 'url' | 'comment' | 'note'
+export type { SearchField }
 export const SEARCH_FIELDS: { key: SearchField; icon: string; label: string }[] = [
   { key: 'name', icon: 'type', label: 'Name' },
   { key: 'folderName', icon: 'folder', label: 'Folder Name' },
@@ -292,39 +292,19 @@ function sortItems(list: RakItem[], key: SortKey, dir: 'asc' | 'desc'): RakItem[
   return dir === 'desc' ? out.reverse() : out
 }
 
-function matchQuery(
-  it: RakItem,
-  q: string,
-  fields: Record<SearchField, boolean>,
-  folderNames: string[]
-): boolean {
-  if (!q) return true
-  const has = (s: string | null | undefined) => !!s && s.toLowerCase().includes(q)
-  if (fields.name && has(it.name)) return true
-  if (fields.extension && has(it.ext)) return true
-  if (fields.tags && (it.tags ?? []).some((t) => has(t))) return true
-  if (fields.url && has(it.url)) return true
-  if (fields.comment && has(it.comment)) return true
-  if (fields.note && has(it.note)) return true
-  if (fields.folderName && folderNames.some((n) => has(n))) return true
-  return false
-}
-
 /** Items shown in the grid: view → filters → field query → sort. */
 export const displayed = derived(
   [items, trash, view, sortKey, sortDir, filters, query, searchFields, folders, randomSeed],
   ([$items, $trash, $view, $sortKey, $sortDir, $filters, $query, $fields, $folders, $seed]) => {
-    const q = $query.trim().toLowerCase()
+    const terms = parseQuery($query.trim())
     const folderName = new Map($folders.map((f) => [f.id, f.name]))
     let out = baseForView($items, $trash, $view).filter((it) => matchFilters(it, $filters))
-    if (q)
+    if (terms.length)
       out = out.filter((it) =>
-        matchQuery(
-          it,
-          q,
-          $fields,
-          (it.folderIds ?? []).map((id) => folderName.get(id) ?? '').filter(Boolean)
-        )
+        matchTerms(it, terms, {
+          fields: $fields,
+          folderNames: (it.folderIds ?? []).map((id) => folderName.get(id) ?? '').filter(Boolean)
+        })
       )
     // "Recently Used" and "Random" impose their own ordering (ignore the sort control).
     if ($view === 'recent') {

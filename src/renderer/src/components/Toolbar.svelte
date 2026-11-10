@@ -54,6 +54,13 @@
       emptying = false
     }
   }
+  const SEARCH_HELP = [
+    'Every word must match. Use "quotes" for a phrase and -word to exclude.',
+    'tag:logo  folder:clients  ext:png,jpg  kind:video',
+    'rating:>3  w:>1920  h:<=1080  size:>2mb',
+    'name: url: note: comment:',
+    'is:linked  is:untagged  is:uncategorized  is:rated  has:url  has:note'
+  ].join('\n')
 </script>
 
 <header class="toolbar drag">
@@ -106,7 +113,7 @@
 
     <div class="search" bind:this={searchEl}>
       <span class="si"><Icon name="search" size={14} /></span>
-      <input class="qinput" bind:value={$query} placeholder="Search…" spellcheck="false" />
+      <input class="qinput" bind:value={$query} placeholder="Search…" spellcheck="false" title={SEARCH_HELP} />
       {#if $query}<button class="qclear" onclick={() => query.set('')} title="Clear"><Icon name="x" size={13} /></button>{/if}
       <button class="scopebtn" use:tooltip={'Search scope'} aria-label="Search scope" onclick={() => (scopeOpen = !scopeOpen)}>
         <Icon name="sliders" size={14} />

@@ -60,7 +60,8 @@ On Intel Macs, [run it from source](#run-from-source).
 - Multiple folders per item, tags with an All Tags page, and smart folders that save a filter.
 - Views for All, Uncategorized, Untagged, Recently Used, Random, and Trash.
 - Filters for type, color, shape, rating, dimensions, duration, size, dates, comment, note, and URL.
-- Search with a configurable scope.
+- Search with a configurable scope and a small query language: `tag:logo ext:png,jpg rating:>3 size:<2mb -draft`
+  (hover the search box for the full list).
 - Duplicate detection for identical files (by content hash) and for similar-looking images (by perceptual hash).
 
 **Viewing and editing**

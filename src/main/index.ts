@@ -772,7 +772,10 @@ function registerIpc(): void {
               click: () => (intent = { action: 'icon', icon: key })
             }))
           },
-          { label: 'Reveal in Finder', click: () => (intent = { action: 'reveal' }) },
+          {
+            label: process.platform === 'darwin' ? 'Reveal in Finder' : 'Show in Explorer',
+            click: () => (intent = { action: 'reveal' })
+          },
           { type: 'separator' },
           {
             label: 'Merge Into',

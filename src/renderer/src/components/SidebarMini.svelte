@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { shortcut } from '../lib/platform'
   import { items, trash, view, setView, searchOpen, sidebarCollapsed, type View } from '../lib/store'
   import Icon from './Icon.svelte'
   import AddMenu from './AddMenu.svelte'
@@ -22,7 +23,7 @@
       <Icon name="sidebar" size={16} />
     </button>
     <AddMenu />
-    <button class="tool" title="Search (⌘F)" onclick={() => searchOpen.set(true)}>
+    <button class="tool" title={`Search (${shortcut('F')})`} onclick={() => searchOpen.set(true)}>
       <Icon name="search" size={16} />
     </button>
   </div>

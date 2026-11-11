@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { shortcut } from '../lib/platform'
   import { onMount, onDestroy } from 'svelte'
   import { EditorView, keymap } from '@codemirror/view'
   import { EditorState } from '@codemirror/state'
@@ -110,7 +111,7 @@
       </div>
       <div class="right">
         <button class="save" onclick={save} disabled={!dirty || saving}>
-          {saving ? 'Saving…' : dirty ? 'Save (⌘S)' : 'Saved'}
+          {saving ? 'Saving…' : dirty ? `Save (${shortcut('S')})` : 'Saved'}
         </button>
         <button class="close" onclick={close} title="Close"><Icon name="x" size={16} /></button>
       </div>

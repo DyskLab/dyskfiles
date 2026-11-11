@@ -89,6 +89,8 @@ interface RakSmartFolder {
 }
 
 interface RakApi {
+  /** process.platform, for platform-specific labels (Finder vs Explorer, ⌘ vs Ctrl). */
+  platform: string
   /** Reopen the last-used library on launch (null if none / missing). */
   getCurrentLibrary(): Promise<RakLibrary | null>
   /** All libraries the app knows about, most-recent first. */

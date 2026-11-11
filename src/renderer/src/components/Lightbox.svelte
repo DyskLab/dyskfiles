@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { revealLabel } from '../lib/platform'
   import { onMount, onDestroy } from 'svelte'
   import { openId, cacheBust, displayed, openAdjacent, cropItem, openExternally } from '../lib/store'
   import { tooltip } from '../lib/tooltip'
@@ -137,7 +138,7 @@
       <button onclick={startCrop} use:tooltip={'Crop'} aria-label="Crop"><Icon name="crop" size={16} /></button>
       <span class="sep"></span>
       <button onclick={() => openExternally(item.id)} use:tooltip={'Open in default app'} aria-label="Open in default app"><Icon name="app" size={16} /></button>
-      <button onclick={reveal} use:tooltip={'Reveal in Finder'} aria-label="Reveal in Finder"><Icon name="reveal" size={16} /></button>
+      <button onclick={reveal} use:tooltip={revealLabel} aria-label={revealLabel}><Icon name="reveal" size={16} /></button>
       <button onclick={close} use:tooltip={'Close (Esc)'} aria-label="Close"><Icon name="x" size={18} /></button>
     {/if}
   </div>

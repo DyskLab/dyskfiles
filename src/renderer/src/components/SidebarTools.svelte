@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { shortcut } from '../lib/platform'
   import { searchOpen, sidebarCollapsed } from '../lib/store'
   import { tooltip } from '../lib/tooltip'
   import Icon from './Icon.svelte'
@@ -8,7 +9,7 @@
 <div class="tools">
   <AddMenu />
 
-  <button class="tool" use:tooltip={'Search (⌘F)'} aria-label="Search" onclick={() => searchOpen.set(true)}>
+  <button class="tool" use:tooltip={`Search (${shortcut('F')})`} aria-label="Search" onclick={() => searchOpen.set(true)}>
     <Icon name="search" size={16} />
   </button>
 

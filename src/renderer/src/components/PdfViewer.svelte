@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { revealLabel } from '../lib/platform'
   import { onMount, onDestroy } from 'svelte'
   import type { PDFDocumentProxy } from 'pdfjs-dist'
   import { openId, openExternally } from '../lib/store'
@@ -102,7 +103,7 @@
     <button onclick={() => zoomBy(1)} disabled={zoomIndex === ZOOMS.length - 1} title="Zoom in"><Icon name="plus" size={16} /></button>
     <span class="gap"></span>
     <button onclick={() => openExternally(item.id)} title="Open in default app"><Icon name="app" size={16} /></button>
-    <button onclick={() => window.rak.revealItem(item.id)} title="Reveal in Finder"><Icon name="reveal" size={16} /></button>
+    <button onclick={() => window.rak.revealItem(item.id)} title={revealLabel}><Icon name="reveal" size={16} /></button>
     <button onclick={close} title="Close"><Icon name="x" size={18} /></button>
   </div>
 

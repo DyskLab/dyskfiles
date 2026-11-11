@@ -9,8 +9,9 @@ import { readPrefs, writePrefs } from './config'
  *
  * macOS only installs updates in place for apps signed with an Apple Developer
  * ID, which DyskFiles is not, so this is a notifier: it finds a newer release,
- * downloads its DMG (verifying size and, when GitHub provides it, SHA-256) and
- * opens it for the user to drag into Applications.
+ * downloads the installer for this platform (verifying size and, when GitHub
+ * provides it, SHA-256) and opens it: the DMG on macOS, for the user to drag
+ * into Applications, or the setup .exe on Windows.
  */
 
 const REPO = 'DyskLab/dyskfiles'
@@ -59,14 +60,22 @@ export function compareVersions(a: string, b: string): number {
   return x.pre < y.pre ? -1 : 1
 }
 
-/** The DMG for this machine's architecture, falling back to any DMG. */
-export function pickAsset(assets: ReleaseAsset[], arch: string = process.arch): ReleaseAsset | null {
-  const dmgs = assets.filter((a) => a.name.toLowerCase().endsWith('.dmg'))
+/**
+ * The installer for this platform and architecture: a DMG on macOS, a setup .exe on
+ * Windows. Falls back to a universal or architecture-less file of the right kind.
+ */
+export function pickAsset(
+  assets: ReleaseAsset[],
+  arch: string = process.arch,
+  platform: string = process.platform
+): ReleaseAsset | null {
+  const ext = platform === 'win32' ? '.exe' : '.dmg'
+  const dmgs = assets.filter((a) => a.name.toLowerCase().endsWith(ext))
   const wanted = arch === 'arm64' ? 'arm64' : 'x64'
   return (
     dmgs.find((a) => a.name.toLowerCase().includes(wanted)) ??
     dmgs.find((a) => /universal/i.test(a.name)) ??
-    // A DMG without an architecture in its name is assumed to fit.
+    // An installer without an architecture in its name is assumed to fit.
     dmgs.find((a) => !/arm64|x64|x86|intel/i.test(a.name)) ??
     null
   )
@@ -83,7 +92,12 @@ interface GitHubRelease {
 }
 
 /** Turn the GitHub API's latest release into update info, or null if it is not newer. */
-export function parseRelease(json: GitHubRelease, current: string, arch: string = process.arch): UpdateInfo | null {
+export function parseRelease(
+  json: GitHubRelease,
+  current: string,
+  arch: string = process.arch,
+  platform: string = process.platform
+): UpdateInfo | null {
   if (!json.tag_name || json.draft || json.prerelease) return null
   const version = json.tag_name.replace(/^v/i, '')
   if (compareVersions(version, current) <= 0) return null
@@ -94,7 +108,8 @@ export function parseRelease(json: GitHubRelease, current: string, arch: string 
       size: a.size,
       ...(a.digest ? { digest: a.digest } : {})
     })),
-    arch
+    arch,
+    platform
   )
   if (!asset) return null
   return {
@@ -211,8 +226,8 @@ export function setAutoCheck(auto: boolean): Promise<void> {
 let downloading: Promise<string> | null = null
 
 /**
- * Download the announced DMG into ~/Downloads (reusing a complete earlier
- * download), verify it, and open it. Returns the DMG's path.
+ * Download the announced installer into Downloads (reusing a complete earlier
+ * download), verify it, and open it. Returns the installer's path.
  */
 export function downloadUpdate(onProgress: (received: number, total: number) => void): Promise<string> {
   if (!latest) return Promise.reject(new Error('No update to download.'))

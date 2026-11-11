@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const api: RakApi = {
+  platform: process.platform,
   getCurrentLibrary: () => ipcRenderer.invoke('library:getCurrent'),
   listLibraries: () => ipcRenderer.invoke('library:known'),
   createLibrary: (name) => ipcRenderer.invoke('library:create', name),

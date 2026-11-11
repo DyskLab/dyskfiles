@@ -1,8 +1,8 @@
 {
   "name": "dyskfiles",
   "productName": "DyskFiles",
-  "version": "0.2.0",
-  "description": "DyskFiles — an Eagle-style desktop asset manager: create a library, drag in images, browse a tidy human-readable index (thumbnails + JSON).",
+  "version": "1.0.0",
+  "description": "DyskFiles \u2014 an Eagle-style desktop asset manager: create a library, drag in images, browse a tidy human-readable index (thumbnails + JSON).",
   "main": "./out/main/index.js",
   "author": "Fanny",
   "license": "MIT",
@@ -12,7 +12,8 @@
     "start": "electron-vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.web.json",
     "dist": "npm run build && electron-builder --mac --arm64",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dist:win": "npm run build && electron-builder --win --x64"
   },
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",
@@ -62,6 +63,24 @@
       "icon": "build/icon.png",
       "hardenedRuntime": false,
       "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-${version}-x64-setup.${ext}",
+      "shortcutName": "DyskFiles"
     }
   }
 }

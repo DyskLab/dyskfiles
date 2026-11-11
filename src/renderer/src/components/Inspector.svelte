@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { revealLabel } from '../lib/platform'
   import {
     displayed,
     selectedId,
@@ -288,7 +289,7 @@
           <button class="export" onclick={exportItem}><Icon name="reveal" size={15} /> Export</button>
           <div class="minirow">
             <button class="mini" onclick={() => openExternally(item.id)} title="Open in default app"><Icon name="app" size={14} /></button>
-            <button class="mini" onclick={reveal} title="Reveal in Finder"><Icon name="folder" size={14} /></button>
+            <button class="mini" onclick={reveal} title={revealLabel}><Icon name="folder" size={14} /></button>
             <button class="mini danger" onclick={trash} title="Delete"><Icon name="trash" size={14} /></button>
           </div>
         {/if}

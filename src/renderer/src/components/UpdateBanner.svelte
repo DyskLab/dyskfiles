@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isMac } from '../lib/platform'
   import { onDestroy } from 'svelte'
   import { updateInfo } from '../lib/store'
   import Icon from './Icon.svelte'
@@ -91,8 +92,12 @@
     <p class="status">Downloading… {mb(received)}{total ? ` of ${mb(total)}` : ''}</p>
   {:else if phase === 'ready'}
     <p class="status">
-      The disk image is open and saved in Downloads. Quit DyskFiles, then drag the new DyskFiles onto Applications and
-      choose Replace.
+      {#if isMac}
+        The disk image is open and saved in Downloads. Quit DyskFiles, then drag the new DyskFiles onto Applications and
+        choose Replace.
+      {:else}
+        The installer is open and saved in Downloads. Quit DyskFiles, then follow the installer to finish the update.
+      {/if}
     </p>
     <div class="actions">
       <span class="grow"></span>

@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/DyskLab/dyskfiles/releases/latest"><img src="https://img.shields.io/github/v/release/DyskLab/dyskfiles" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/DyskLab/dyskfiles" alt="MIT License"></a>
-  <a href="https://www.fanny.dev/dysklab"><img src="https://img.shields.io/badge/part%20of-DyskLab-3B82F6" alt="Part of DyskLab"></a>
+  <a href="https://dysklab.fanny.dev"><img src="https://img.shields.io/badge/part%20of-DyskLab-3B82F6" alt="Part of DyskLab"></a>
   <a href="https://buymeacoffee.com/fannydevz"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-FFDD00?logo=buymeacoffee&logoColor=000" alt="Buy Me a Coffee"></a>
 </p>
 
@@ -17,24 +17,29 @@
 
 Create a library, drag in your images, videos, audio, and text files, then browse and organize them. Unlike Eagle,
 which stores items in randomly named `xxxx.info/` folders, DyskFiles keeps everything in flat folders you can read in
-Finder, grouped by the first three letters of each file name.
+Finder or Explorer, grouped by the first three letters of each file name.
 
 ## Download
 
-Get the DMG for Apple Silicon from the [latest release](https://github.com/DyskLab/dyskfiles/releases/latest), open it,
-and drag **DyskFiles** into Applications.
+Get it from the [latest release](https://github.com/DyskLab/dyskfiles/releases/latest):
 
-The app isn't notarized, so macOS blocks the first launch. Open **System Settings > Privacy & Security** and choose
+- **macOS (Apple Silicon):** `DyskFiles-<version>-arm64.dmg`. Open it and drag **DyskFiles** into Applications.
+- **Windows (64-bit):** `DyskFiles-<version>-x64-setup.exe`. Run it and follow the installer.
+
+The Mac app isn't notarized, so macOS blocks the first launch. Open **System Settings > Privacy & Security** and choose
 **Open Anyway**, or run:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/DyskFiles.app
 ```
 
+The Windows installer isn't code-signed, so SmartScreen may warn on the first run: choose **More info > Run anyway**.
+
 On Intel Macs, [run it from source](#run-from-source).
 
 **Updates:** DyskFiles checks GitHub for a new release once a day (or from **DyskFiles > Check for Updates…**). When
-one is out, it downloads and opens the new DMG; quit the app and drag the new version onto Applications. Turn the daily
+one is out, it downloads and opens the installer: on macOS, quit the app and drag the new version onto Applications;
+on Windows, quit the app and finish the setup. Turn the daily
 check off in the Check for Updates dialog.
 
 ## Features
@@ -125,14 +130,17 @@ npm run dev
 | `npm run check` | Runs `svelte-check` |
 | `npm test` | Runs the library tests with Vitest |
 | `npm run dist` | Builds the Apple Silicon DMG into `dist/` |
+| `npm run dist:win` | Builds the 64-bit Windows installer into `dist/` (works from a Mac too) |
 
 ## Releasing
 
-1. Bump `version` in `package.json` and run `npm run dist`.
-2. Create a GitHub release tagged `v<version>` (not a draft or pre-release) and attach `dist/DyskFiles-<version>-arm64.dmg`.
+1. Bump `version` in `package.json` and run `npm run dist` and `npm run dist:win`. Building for Windows from a Mac
+   needs sharp's Windows binary first: `npm install --no-save --force @img/sharp-win32-x64@<sharp version>`.
+2. Create a GitHub release tagged `v<version>` (not a draft or pre-release) and attach
+   `dist/DyskFiles-<version>-arm64.dmg` and `dist/DyskFiles-<version>-x64-setup.exe`.
 
-The app compares the tag with its own version and picks the DMG whose name contains its architecture (`arm64`, or
-`x64` for an Intel build), so keep that naming.
+The app compares the tag with its own version and picks the installer for its platform (`.dmg` on macOS, `.exe` on
+Windows) whose name contains its architecture (`arm64` or `x64`), so keep that naming.
 
 ## Project structure
 
@@ -149,7 +157,7 @@ DyskFiles is free and open source. If it helps you, you can
 
 ## Part of DyskLab
 
-DyskFiles is part of [DyskLab](https://www.fanny.dev/dysklab), alongside
+DyskFiles is part of [DyskLab](https://dysklab.fanny.dev), alongside
 [DyskFlow](https://github.com/DyskLab/dyskflow), [DyskFocus](https://github.com/DyskLab/dyskfocus), and DyskLink for
 [Mac](https://github.com/DyskLab/dysklink-mac) and [Android](https://github.com/DyskLab/dysklink-android).
 

@@ -35,6 +35,15 @@ describe('pickAsset', () => {
   })
 })
 
+describe('pickAsset on Windows', () => {
+  it('picks the setup .exe and ignores DMGs', () => {
+    const all = [asset('DyskFiles-1.0.0-arm64.dmg'), asset('DyskFiles-1.0.0-x64-setup.exe')]
+    expect(pickAsset(all, 'x64', 'win32')?.name).toBe('DyskFiles-1.0.0-x64-setup.exe')
+    expect(pickAsset([asset('DyskFiles-1.0.0-arm64.dmg')], 'x64', 'win32')).toBeNull()
+    expect(pickAsset(all, 'arm64', 'darwin')?.name).toBe('DyskFiles-1.0.0-arm64.dmg')
+  })
+})
+
 describe('parseRelease', () => {
   const release = {
     tag_name: 'v0.2.0',
